@@ -373,8 +373,6 @@ class DaceBackend(gt_backend.BaseBackend):
         sdfg.specialize(specialize_dict)
         for sd in sdfg.all_sdfgs_recursive():
             sd.specialize(specialize_dict)
-        sdfg.save(dace_build_path + os.path.sep + "tmp.sdfg")
-        sdfg = dace.SDFG.from_file(dace_build_path + os.path.sep + "tmp.sdfg")
 
         implementation_ir.sdfg = copy.deepcopy(sdfg)
 
