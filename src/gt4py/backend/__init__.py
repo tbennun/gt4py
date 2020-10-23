@@ -21,6 +21,8 @@ from . import python_generator
 
 # isort: on
 
+from .dace.cpu_backend import CPUDaceBackend
+from .dace.gpu_backend import GPUDaceBackend
 from .debug_backend import *
 from .gt_backends import *
 from .numpy_backend import *

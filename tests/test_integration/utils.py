@@ -22,7 +22,7 @@ from .stencil_definitions import EXTERNALS_REGISTRY
 from .stencil_definitions import REGISTRY as stencil_registry
 
 
-def generate_test_module(name, backend, *, id_version, rebuild=True):
+def generate_test_module(name, backend, *, id_version, rebuild=True, **kwargs):
     module_name = "_test_module." + name
     stencil_name = name
     backend_opts = {}
@@ -35,7 +35,14 @@ def generate_test_module(name, backend, *, id_version, rebuild=True):
     options = gt_definitions.BuildOptions(
         name=stencil_name, module=module_name, rebuild=rebuild, backend_opts=backend_opts
     )
-    decorator = gtscript.stencil(backend=backend.name, externals=EXTERNALS_REGISTRY[stencil_name])
+
+    decorator = gtscript.stencil(
+        backend=backend.name,
+        externals=EXTERNALS_REGISTRY[stencil_name],
+        name=stencil_name,
+        rebuild=rebuild,
+        **backend_opts,
+    )
     stencil_definition = stencil_registry[name]
 
     return decorator(stencil_definition)

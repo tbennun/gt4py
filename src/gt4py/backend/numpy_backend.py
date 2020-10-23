@@ -377,7 +377,10 @@ class NumPyBackend(gt_backend.BaseBackend, gt_backend.PurePythonBackendCLIMixin)
     """
 
     name = "numpy"
-    options = {"ignore_np_errstate": {"versioning": True, "type": bool}}
+    options = {
+        "ignore_np_errstate": {"versioning": True, "type": bool},
+        "enforce_dtype": {"versioning": True, "type": bool},
+    }
     storage_info = {
         "alignment": 1,
         "device": "cpu",

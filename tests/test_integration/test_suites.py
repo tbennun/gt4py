@@ -480,8 +480,11 @@ class TestRuntimeIfNestedDataDependent(gt_testing.StencilTestSuite):
     )
 
     def definition(field_a, field_b, field_c, *, factor):
+        # def definition(field_a, field_c, *, factor):
         # from __externals__ import factor
         with computation(PARALLEL), interval(...):
+            field_b = 0
+            field_c = 0
             if factor > 0:
                 if field_a < 0:
                     field_b = -field_a
@@ -492,15 +495,60 @@ class TestRuntimeIfNestedDataDependent(gt_testing.StencilTestSuite):
                     field_c = -field_a
                 else:
                     field_c = field_a
-
             field_a = add_one(field_a)
 
     def validation(field_a, field_b, field_c, *, factor, domain, origin, **kwargs):
-
+        # def validation(field_a, field_c, *, factor, domain, origin, **kwargs):
+        field_b[...] = 0
+        field_c[...] = 0
         if factor > 0:
             field_b[...] = np.abs(field_a)
         else:
             field_c[...] = np.abs(field_a)
+        field_a += 1
+
+
+class TestRuntimeIfNested2DataDependent(gt_testing.StencilTestSuite):
+
+    dtypes = (np.float_,)
+    domain_range = [(3, 3), (3, 3), (3, 3)]
+    backends = ["dacex86"]
+    symbols = dict(
+        # factor=gt_testing.global_name(one_of=(-1., 0., 1.)),
+        factor=gt_testing.parameter(in_range=(-100, 100)),
+        field_a=gt_testing.field(in_range=(-1, 1), boundary=[(0, 0), (0, 0), (0, 0)]),
+        field_b=gt_testing.field(in_range=(-1, 1), boundary=[(0, 0), (0, 0), (0, 0)]),
+        field_c=gt_testing.field(in_range=(-1, 1), boundary=[(0, 0), (0, 0), (0, 0)]),
+    )
+
+    def definition(field_a, field_b, field_c, *, factor):
+        # def definition(field_a, field_c, *, factor):
+        # from __externals__ import factor
+        with computation(PARALLEL), interval(...):
+            field_b = 0
+            field_c = 0
+            if factor > 0:
+                if field_a < 0:
+                    field_b = -field_a
+                else:
+                    field_b = field_a
+            else:
+                if field_a < 0:
+                    field_b = -field_a + 1
+                else:
+                    field_c = field_a
+            field_a = add_one(field_a)
+
+    def validation(field_a, field_b, field_c, *, factor, domain, origin, **kwargs):
+        # def validation(field_a, field_c, *, factor, domain, origin, **kwargs):
+        field_b[...] = 0
+        field_c[...] = 0
+        if factor > 0:
+            field_b[...] = np.abs(field_a)
+        else:
+            tmp = -np.copy(field_a) + 1
+            field_b[field_a < 0] = tmp[field_a < 0]
+            field_c[field_a >= 0] = field_a[field_a >= 0]
         field_a += 1
 
 
@@ -569,3 +617,83 @@ class TestThreeWayOr(gt_testing.StencilTestSuite):
 
     def validation(outfield, *, a, b, c, domain, origin, **kwargs):
         outfield[...] = 1 if a > 0 or b > 0 or c > 0 else 0
+
+
+class TestSimple(gt_testing.StencilTestSuite):
+
+    dtypes = (np.float_,)
+    domain_range = [(1, 1), (1, 1), (10, 10)]
+    backends = ["numpy", "dacex86"]
+    symbols = dict(
+        inf=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+        diag=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+        sup=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+        rhs=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+        out=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+    )
+
+    def definition(inf, diag, sup, rhs, out):
+        # with computation(FORWARD):
+        #     with interval(0, 1):
+        #         sup = sup / diag
+        #     with interval(1, None):
+        #         sup = sup / (diag - sup[0, 0, -1] * inf)
+        with computation(PARALLEL):
+            with interval(...):
+                diag = diag
+                inf = inf
+        with computation(BACKWARD):
+            with interval(-1, None):
+                out = rhs
+            with interval(0, -1):
+                out = rhs - sup * out[0, 0, 1]
+
+    def validation(inf, diag, sup, rhs, out, *, domain, origin, **kwargs):
+        # for k in range(0, 1):
+        #     sup[:, :, k] = sup[:, :, k] / diag[:, :, k]
+        # for k in range(1, domain[-1]):
+        #     sup[:, :, k] = sup[:, :, k] / (diag[:, :, k] - sup[:, :, k - 1] * inf[:, :, k])
+        for k in range(domain[-1] - 1, domain[-1] - 2, -1):
+            out[:, :, k] = rhs[:, :, k]
+        for k in range(domain[-1] - 2, -1, -1):
+            out[:, :, k] = rhs[:, :, k] - sup[:, :, k] * out[:, :, k + 1]
+
+
+class TestKScan(gt_testing.StencilTestSuite):
+    dtypes = (np.float_,)
+    domain_range = [(1, 10), (1, 10), (10, 10)]
+    backends = ["dacex86"]
+    symbols = dict(
+        inp=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+        out=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
+    )
+
+    def definition(inp, out):
+        with computation(FORWARD):
+            with interval(0, 1):
+                buf = inp
+                out = buf
+            with interval(1, 2):
+                buf = inp[0, 0, -1] / 2
+                out = buf + buf[0, 0, -1] / 4
+            with interval(2, -1):
+                buf = inp[0, 0, -1] / 2
+                out = buf + buf[0, 0, -1] / 4 + buf[0, 0, -2] / 8
+            with interval(-1, None):
+                buf = inp[0, 0, -1] / 2
+                out = buf + buf[0, 0, -1] / 4 + buf[0, 0, -2] / 8
+
+    def validation(inp, out, *, domain, origin, **kwargs):
+        assert inp.shape == out.shape == domain
+        assert all(o == (0, 0, 0) for o in origin.values())
+        buf = np.empty_like(inp)
+        nk = inp.shape[2]
+        buf[:, :, 0] = inp[:, :, 0]
+        buf[:, :, 1] = inp[:, :, 0] / 2
+        out[:, :, 0] = buf[:, :, 0]
+        buf[:, :, 2] = inp[:, :, 1] / 2
+        out[:, :, 1] = buf[:, :, 1] + buf[:, :, 0] / 4
+        for j in range(2, nk - 1):
+            buf[:, :, j + 1] = inp[:, :, j] / 2
+            out[:, :, j] = buf[:, :, j] + buf[:, :, j - 1] / 4 + buf[:, :, j - 2] / 8
+        out[:, :, nk - 1] = buf[:, :, nk - 1] + buf[:, :, nk - 2] / 4 + buf[:, :, nk - 3] / 8

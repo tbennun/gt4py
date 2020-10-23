@@ -373,10 +373,10 @@ def make_tridiagonal_solver():
 
     # Backward
     def backward_thomas(inf, diag, sup, rhs, out):
-        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
-            out = rhs - sup * out[0, 0, 1]
         with gt.region(iteration=gt.BACKWARD, k_interval=(-1, None)):
             out = rhs
+        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
+            out = rhs - sup * out[0, 0, 1]
 
     backward_stage = gt_ir.utils.make_stage(
         backward_thomas,
@@ -518,13 +518,13 @@ def make_vertical_advection_dycore():
     )
 
     def u_backward_function(utens_stage, u_pos, ccol, dcol, data_col, *, dtr_stage):
-        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
-            datacol = dcol[0, 0, 0] - ccol[0, 0, 0] * data_col[0, 0, 1]
-            data_col = datacol
-            utens_stage = dtr_stage * (datacol - u_pos[0, 0, 0])
 
         with gt.region(iteration=gt.BACKWARD, k_interval=(-1, None)):
             datacol = dcol[0, 0, 0]
+            data_col = datacol
+            utens_stage = dtr_stage * (datacol - u_pos[0, 0, 0])
+        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
+            datacol = dcol[0, 0, 0] - ccol[0, 0, 0] * data_col[0, 0, 1]
             data_col = datacol
             utens_stage = dtr_stage * (datacol - u_pos[0, 0, 0])
 
@@ -685,13 +685,12 @@ def make_vertical_advection_dycore_with_scalar_storage():
     )
 
     def u_backward_function(utens_stage, u_pos, dtr_stage, ccol, dcol, data_col):
-        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
-            datacol = dcol[0, 0, 0] - ccol[0, 0, 0] * data_col[0, 0, 1]
-            data_col = datacol
-            utens_stage = dtr_stage[0, 0, 0] * (datacol - u_pos[0, 0, 0])
-
         with gt.region(iteration=gt.BACKWARD, k_interval=(-1, None)):
             datacol = dcol[0, 0, 0]
+            data_col = datacol
+            utens_stage = dtr_stage[0, 0, 0] * (datacol - u_pos[0, 0, 0])
+        with gt.region(iteration=gt.BACKWARD, k_interval=(0, -1)):
+            datacol = dcol[0, 0, 0] - ccol[0, 0, 0] * data_col[0, 0, 1]
             data_col = datacol
             utens_stage = dtr_stage[0, 0, 0] * (datacol - u_pos[0, 0, 0])
 

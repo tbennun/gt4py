@@ -229,7 +229,7 @@ class DebugBackend(gt_backend.BaseBackend, gt_backend.PurePythonBackendCLIMixin)
     """Pure Python backend, unoptimized for debugging."""
 
     name = "debug"
-    options = {}
+    options = {"enforce_dtype": {"versioning": True}}
     storage_info = {
         "alignment": 1,
         "device": "cpu",

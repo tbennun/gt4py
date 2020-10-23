@@ -98,9 +98,9 @@ class IRTransformer:
         compute_extent_pass = ComputeExtentsPass()
         compute_extent_pass.apply(self.transform_data)
 
-        # Merge compatible blocks
-        merge_blocks_pass = MergeBlocksPass()
-        merge_blocks_pass.apply(self.transform_data)
+        # # Merge compatible blocks
+        # merge_blocks_pass = MergeBlocksPass()
+        # merge_blocks_pass.apply(self.transform_data)
 
         # Compute used symbols
         compute_used_symbols_pass = ComputeUsedSymbolsPass()
@@ -116,8 +116,8 @@ class IRTransformer:
 
         # turn temporary fields that are only written and read within the same function
         # into local scalars
-        demote_local_temporaries_to_variables_pass = DemoteLocalTemporariesToVariablesPass()
-        demote_local_temporaries_to_variables_pass.apply(self.transform_data)
+        # demote_local_temporaries_to_variables_pass = DemoteLocalTemporariesToVariablesPass()
+        # demote_local_temporaries_to_variables_pass.apply(self.transform_data)
 
         # prune some stages that don't have effect
         housekeeping_pass = HousekeepingPass()

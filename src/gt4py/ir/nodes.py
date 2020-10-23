@@ -317,7 +317,7 @@ class DataType(enum.Enum):
 
     @classmethod
     def from_dtype(cls, py_dtype):
-        if isinstance(py_dtype, type):
+        if isinstance(py_dtype, (type, str)):
             py_dtype = np.dtype(py_dtype)
         assert isinstance(py_dtype, np.dtype)
         return cls.NUMPY_TO_NATIVE_TYPE.get(py_dtype.name, cls.INVALID)
@@ -326,6 +326,10 @@ class DataType(enum.Enum):
     def merge(cls, *args):
         result = cls(max(arg.value for arg in args))
         return result
+
+    @property
+    def ctypes_str(self):
+        return self.NATIVE_TYPE_TO_CTYPES[self]
 
 
 DataType.NATIVE_TYPE_TO_NUMPY = {
@@ -343,6 +347,20 @@ DataType.NUMPY_TO_NATIVE_TYPE = {
     value: key for key, value in DataType.NATIVE_TYPE_TO_NUMPY.items() if key != DataType.DEFAULT
 }
 
+DataType.NATIVE_TYPE_TO_CTYPES = {
+    DataType.DEFAULT: "c_double",
+    DataType.BOOL: "c_bool",
+    DataType.INT8: "c_byte",
+    DataType.INT16: "c_short",
+    DataType.INT32: "c_int",
+    DataType.INT64: "c_long",
+    DataType.FLOAT32: "c_float",
+    DataType.FLOAT64: "c_double",
+}
+
+DataType.CTYPES_TO_NATIVE_TYPE = {
+    value: key for key, value in DataType.NATIVE_TYPE_TO_CTYPES.items() if key != DataType.DEFAULT
+}
 
 # ---- IR: expressions ----
 class Expr(Node):

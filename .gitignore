@@ -4,6 +4,11 @@ _local_
 ### GT4Py ####
 .gt_cache/
 
+### DaCe ###
+*.sdfg
+_dotgraphs
+.dacecache/
+
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/
