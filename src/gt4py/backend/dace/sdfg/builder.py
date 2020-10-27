@@ -467,10 +467,10 @@ class SDFGBuilder:
         def visit_VarRef(self, node: gt_ir.VarRef):
             if node.name not in self.apply_block.symbols:
                 self.apply_block.symbols[
-                    local_name(node.name, None, is_target=False)
+                    local_name(node.name, None, is_target=node.was_output)
                 ] = dace.symbol(
-                    local_name(node.name, None, is_target=False),
-                    dace.dtypes.typeclass(self.parameters[node.name].data_type.dtype.type),
+                    local_name(node.name, None, is_target=node.was_output),
+                    dace.dtypes.typeclass(self.variables[node.name].data_type.dtype.type),
                 )
 
         def visit_ApplyBlock(self, node: gt_ir.ApplyBlock):
@@ -549,6 +549,8 @@ class SDFGBuilder:
 
             self._append_states(state, state)
 
+            node.symbols = None
+
         def visit_MultiStage(self, node: gt_ir.MultiStage):
             self.iteration_order = node.iteration_order
             self.generic_visit(node)
@@ -556,7 +558,7 @@ class SDFGBuilder:
 
         def visit_StencilImplementation(self, node: gt_ir.StencilImplementation):
             self.fields = node.fields
-            self.parameters = node.parameters
+            self.variables = node.variables
             for field in node.fields.values():
                 if field.name in node.unreferenced:
                     continue

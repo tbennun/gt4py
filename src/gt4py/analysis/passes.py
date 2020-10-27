@@ -834,7 +834,7 @@ class DataTypePass(TransformPass):
     class CollectDataTypes(gt_ir.IRNodeVisitor):
         def __call__(self, node):
             assert isinstance(node, gt_ir.StencilImplementation)
-            self.vars = node.parameters
+            self.vars = node.variables
             self.fields = node.fields
             self.visit(node)
 
@@ -1067,7 +1067,7 @@ class BuildIIRPass(TransformPass):
 
             decl = symbol.decl
             if isinstance(decl, gt_ir.VarDecl):
-                self.iir.parameters[name] = decl
+                self.iir.variables[name] = decl
             else:
                 self.iir.fields[name] = decl
 
@@ -1256,13 +1256,15 @@ class DemoteLocalTemporariesToVariablesPass(TransformPass):
             if node.name in self.demotables:
                 if node.name not in self.local_symbols:
                     field_decl = self.fields[node.name]
-                    self.local_symbols[node.name] = gt_ir.VarDecl(
+                    var_decl = gt_ir.VarDecl(
                         name=node.name,
                         data_type=field_decl.data_type,
                         length=1,
                         is_api=False,
                         loc=field_decl.loc,
                     )
+                    self.local_symbols[node.name] = var_decl
+                    self.iir.variables[node.name] = var_decl
                 return True, gt_ir.VarRef(name=node.name, index=0, loc=node.loc)
 
             else:

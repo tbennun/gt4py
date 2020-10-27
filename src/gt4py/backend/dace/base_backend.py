@@ -325,6 +325,7 @@ class DaceBackend(gt_backend.BasePyExtBackend):
         os.makedirs(dace_build_path, exist_ok=True)
 
         save = options.backend_opts.get("save_intermediate", False)
+        save = True
         optimizer = options.backend_opts.get("optimizer", self.DEFAULT_OPTIMIZER)
         if "optimizer" in options.backend_opts:
             options.backend_opts["optimizer"] = optimizer.__class__.__name__

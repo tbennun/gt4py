@@ -842,7 +842,7 @@ class StencilImplementation(IIRNode):
     api_signature = attribute(of=ListOf[ArgumentInfo])
     domain = attribute(of=Domain)
     fields = attribute(of=DictOf[str, FieldDecl])  # All fields, including temporaries
-    parameters = attribute(of=DictOf[str, VarDecl])
+    variables = attribute(of=DictOf[str, VarDecl])
     multi_stages = attribute(of=ListOf[MultiStage])
     fields_extents = attribute(of=DictOf[str, Extent])
     unreferenced = attribute(of=ListOf[str], factory=list)
@@ -872,6 +872,14 @@ class StencilImplementation(IIRNode):
     def temporary_fields(self):
         result = [f.name for f in self.fields.values() if not f.is_api]
         return result
+
+    @property
+    def parameters(self):
+        return {p: decl for p, decl in self.variables.items() if decl.is_api}
+
+    @property
+    def temporary_variables(self):
+        return {p: decl for p, decl in self.variables.items() if not decl.is_api}
 
 
 # ---- Helpers ----
