@@ -6,7 +6,7 @@ from dace import registry, symbolic
 from dace.properties import Property, make_properties
 from dace.sdfg import SDFG, nodes
 from dace.sdfg import utils as sdutils
-from dace.transformation.pattern_matching import Transformation
+from dace.transformation.transformation import Transformation
 
 
 def global_ij_tiling(sdfg, tile_size=(8, 8)):
@@ -182,16 +182,16 @@ def global_ij_tiling(sdfg, tile_size=(8, 8)):
 
 
 import dace.sdfg.utils
-import dace.transformation.pattern_matching as pattern_matching
 from dace import nodes
 from dace.properties import Property, ShapeProperty, make_properties
+from dace.transformation.transformation import Transformation
 
 import gt4py
 from gt4py.backend.dace.sdfg import library
 
 
 @registry.autoregister_params(singlestate=True)
-class PruneTransientOutputs(pattern_matching.Transformation):
+class PruneTransientOutputs(Transformation):
 
     _library_node = dace.nodes.LibraryNode("")
     _access_node = nodes.AccessNode("")
@@ -356,7 +356,7 @@ class PruneTransientOutputs(pattern_matching.Transformation):
 
 @registry.autoregister_params(singlestate=True)
 @make_properties
-class TaskletAsKLoop(pattern_matching.Transformation):
+class TaskletAsKLoop(Transformation):
     """Docstring TODO"""
 
     _map_entry = nodes.MapEntry(nodes.Map("", [], []))
@@ -399,7 +399,6 @@ class TaskletAsKLoop(pattern_matching.Transformation):
         map_entry: dace.nodes.MapEntry = graph.nodes()[self.subgraph[TaskletAsKLoop._map_entry]]
         tasklet: dace.nodes.Tasklet = graph.nodes()[self.subgraph[TaskletAsKLoop._tasklet]]
         map_exit: dace.nodes.MapExit = graph.nodes()[self.subgraph[TaskletAsKLoop._map_exit]]
-        from dace.transformation.helpers import nest_state_subgraph
 
         k_min, k_max = self._k_range()
         # fix outer edges to ij map
@@ -863,7 +862,7 @@ class AlwaysApplyLoopPeeling(LoopPeeling):
 
 @registry.autoregister
 @make_properties
-class PrefetchingKCachesTransform(dace.transformation.pattern_matching.Transformation):
+class PrefetchingKCachesTransform(Transformation):
     _nsdfg_node = dace.nodes.LibraryNode("")
 
     storage_type = dace.properties.Property(
@@ -1557,7 +1556,7 @@ from dace.sdfg import nodes
 from dace.sdfg import utils as sdutils
 from dace.transformation.interstate.loop_detection import DetectLoop
 from dace.transformation.interstate.loop_unroll import LoopUnroll
-from dace.transformation.pattern_matching import Transformation
+from dace.transformation.transformation import Transformation
 
 
 @registry.autoregister

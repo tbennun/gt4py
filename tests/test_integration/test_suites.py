@@ -623,7 +623,7 @@ class TestSimple(gt_testing.StencilTestSuite):
 
     dtypes = (np.float_,)
     domain_range = [(1, 1), (1, 1), (10, 10)]
-    backends = ["numpy", "dacex86"]
+    backends = CPU_BACKENDS
     symbols = dict(
         inf=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
         diag=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
@@ -662,7 +662,7 @@ class TestSimple(gt_testing.StencilTestSuite):
 class TestKScan(gt_testing.StencilTestSuite):
     dtypes = (np.float_,)
     domain_range = [(1, 10), (1, 10), (10, 10)]
-    backends = ["dacex86"]
+    backends = CPU_BACKENDS
     symbols = dict(
         inp=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),
         out=gt_testing.field(in_range=(-10, 10), boundary=[(0, 0), (0, 0), (0, 0)]),

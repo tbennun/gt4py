@@ -178,8 +178,8 @@ class SDFGBuilder:
             return {node.local_name}, set()
 
         def visit_VarRef(self, node: gt_ir.VarRef, is_target=False, *, accesses):
-            node.was_output = is_target or local_name(node.name, None, True) in accesses
-            node.local_name = local_name(node.name, None, node.was_output)
+            node.was_output = False
+            node.local_name = local_name(node.name, None, False)
             return set(), set()
 
     class GenerateMappedMemletsPass(gt_ir.IRNodeVisitor):
@@ -288,6 +288,38 @@ class SDFGBuilder:
             **gt_ir.BinaryOperator.IR_OP_TO_PYTHON_SYMBOL,
         }
 
+        NATIVE_FUNC_TO_PYTHON = {
+            gt_ir.NativeFunction.ABS: "abs",
+            gt_ir.NativeFunction.MIN: "min",
+            gt_ir.NativeFunction.MAX: "max",
+            gt_ir.NativeFunction.MOD: "math.fmod",
+            gt_ir.NativeFunction.SIN: "math.sin",
+            gt_ir.NativeFunction.COS: "math.cos",
+            gt_ir.NativeFunction.TAN: "math.tan",
+            gt_ir.NativeFunction.ARCSIN: "math.asin",
+            gt_ir.NativeFunction.ARCCOS: "math.acos",
+            gt_ir.NativeFunction.ARCTAN: "math.atan",
+            gt_ir.NativeFunction.SQRT: "math.sqrt",
+            gt_ir.NativeFunction.EXP: "math.exp",
+            gt_ir.NativeFunction.LOG: "math.log",
+            gt_ir.NativeFunction.ISFINITE: "math.isfinite",
+            gt_ir.NativeFunction.ISINF: "math.isinf",
+            gt_ir.NativeFunction.ISNAN: "math.isnan",
+            gt_ir.NativeFunction.FLOOR: "math.floor",
+            gt_ir.NativeFunction.CEIL: "math.ceil",
+            gt_ir.NativeFunction.TRUNC: "math.trunc",
+        }
+
+        # DATA_TYPE_TO_CPP = {
+        #     gt_ir.DataType.BOOL: "bool",
+        #     gt_ir.DataType.INT8: "int8_t",
+        #     gt_ir.DataType.INT16: "int16_t",
+        #     gt_ir.DataType.INT32: "int32_t",
+        #     gt_ir.DataType.INT64: "int64_t",
+        #     gt_ir.DataType.FLOAT32: "float32_t",
+        #     gt_ir.DataType.FLOAT64: "float64_t",
+        #     gt_ir.DataType.DEFAULT: "float64_t",
+        # }
         @classmethod
         def apply(cls, iir: gt_ir.StencilImplementation):
             transformer = cls()
@@ -321,12 +353,7 @@ class SDFGBuilder:
             return body_sources
 
         def visit_ScalarLiteral(self, node: gt_ir.ScalarLiteral):
-            dtype: gt_ir.DataType = node.data_type
-            ctype = dace.dtypes.DTYPE_TO_TYPECLASS[dtype.dtype.type].ctype
-            if np.issubdtype(dtype.dtype.type, np.floating):
-                return f"{ctype}({node.value})"
-            else:
-                return str(node.value)
+            return f"dace.{node.data_type.dtype}({node.value})"
 
         def visit_VarRef(self, node: gt_ir.VarRef):
             return node.local_name
@@ -351,6 +378,9 @@ class SDFGBuilder:
             )
 
             return source
+
+        def visit_Cast(self, node: gt_ir.Cast):
+            return f"dace.{node.dtype.dtype}({self.visit(node.expr)})"
 
         def visit_TernaryOpExpr(self, node: gt_ir.TernaryOpExpr):
             then_fmt = "({})" if isinstance(node.then_expr, gt_ir.CompositeExpr) else "{}"
@@ -378,6 +408,11 @@ class SDFGBuilder:
                     body_sources.extend(self.visit(stmt))
                 body_sources.dedent()
             return ["".join([str(item) for item in line]) for line in body_sources.lines]
+
+        def visit_NativeFuncCall(self, node: gt_ir.NativeFuncCall):
+            call = self.NATIVE_FUNC_TO_PYTHON[node.func]
+            args = ",".join(self.visit(arg) for arg in node.args)
+            return f"{call}({args})"
 
     class GenerateSDFGPass(gt_ir.IRNodeVisitor):
         @classmethod
@@ -414,45 +449,45 @@ class SDFGBuilder:
             self.sdfg.add_edge(self.tail_state, entry_state, dace.InterstateEdge())
             self.tail_state = exit_state
 
-        def _make_mapped_computation(self, node: gt_ir.ApplyBlock, map_range):
-            state = self.sdfg.add_state()
-
-            tasklet = state.add_tasklet(
-                name=self.new_tasklet_name(),
-                inputs=node.mapped_input_memlets,
-                outputs=node.mapped_output_memlets,
-                code=node.tasklet_code,
-            )
-            map_entry, map_exit = state.add_map(name=self.new_map_name(), ndrange=map_range)
-
-            for memlet_info in node.mapped_input_memlet_infos.values():
-                name = memlet_info.outer_name
-                state.add_memlet_path(
-                    state.add_read(name),
-                    map_entry,
-                    tasklet,
-                    memlet=node.mapped_input_memlets[memlet_info.local_name],
-                    dst_conn=memlet_info.local_name,
-                )
-            if len(node.mapped_input_memlet_infos) == 0:
-                state.add_edge(map_entry, None, tasklet, None, dace.Memlet())
-
-            out_field_accessors = dict()
-            for memlet_info in node.mapped_output_memlet_infos.values():
-                name = memlet_info.outer_name
-                if name not in out_field_accessors:
-                    out_field_accessors[name] = state.add_write(name)
-                state.add_memlet_path(
-                    tasklet,
-                    map_exit,
-                    out_field_accessors[name],
-                    memlet=node.mapped_output_memlets[memlet_info.local_name],
-                    src_conn=memlet_info.local_name,
-                )
-            if len(node.mapped_output_memlet_infos) == 0:
-                state.add_edge(tasklet, None, map_exit, None, dace.Memlet())
-
-            return state
+        # def _make_mapped_computation(self, node: gt_ir.ApplyBlock, map_range):
+        #     state = self.sdfg.add_state()
+        #
+        #     tasklet = state.add_tasklet(
+        #         name=self.new_tasklet_name(),
+        #         inputs=node.mapped_input_memlets,
+        #         outputs=node.mapped_output_memlets,
+        #         code=node.tasklet_code,
+        #     )
+        #     map_entry, map_exit = state.add_map(name=self.new_map_name(), ndrange=map_range)
+        #
+        #     for memlet_info in node.mapped_input_memlet_infos.values():
+        #         name = memlet_info.outer_name
+        #         state.add_memlet_path(
+        #             state.add_read(name),
+        #             map_entry,
+        #             tasklet,
+        #             memlet=node.mapped_input_memlets[memlet_info.local_name],
+        #             dst_conn=memlet_info.local_name,
+        #         )
+        #     if len(node.mapped_input_memlet_infos) == 0:
+        #         state.add_edge(map_entry, None, tasklet, None, dace.Memlet())
+        #
+        #     out_field_accessors = dict()
+        #     for memlet_info in node.mapped_output_memlet_infos.values():
+        #         name = memlet_info.outer_name
+        #         if name not in out_field_accessors:
+        #             out_field_accessors[name] = state.add_write(name)
+        #         state.add_memlet_path(
+        #             tasklet,
+        #             map_exit,
+        #             out_field_accessors[name],
+        #             memlet=node.mapped_output_memlets[memlet_info.local_name],
+        #             src_conn=memlet_info.local_name,
+        #         )
+        #     if len(node.mapped_output_memlet_infos) == 0:
+        #         state.add_edge(tasklet, None, map_exit, None, dace.Memlet())
+        #
+        #     return state
 
         def visit_FieldRef(self, node: gt_ir.FieldRef):
             import copy
@@ -465,12 +500,14 @@ class SDFGBuilder:
                 self.apply_block.arrays[node.name] = array
 
         def visit_VarRef(self, node: gt_ir.VarRef):
-            if node.name not in self.apply_block.symbols:
+            if node.name not in self.apply_block.symbols and node.name in self.parameters:
                 self.apply_block.symbols[
                     local_name(node.name, None, is_target=node.was_output)
                 ] = dace.symbol(
                     local_name(node.name, None, is_target=node.was_output),
-                    dace.dtypes.typeclass(self.variables[node.name].data_type.dtype.type),
+                    dace.dtypes.typeclass(
+                        np.dtype(self.parameters[node.name].data_type.dtype).type
+                    ),
                 )
 
         def visit_ApplyBlock(self, node: gt_ir.ApplyBlock):
@@ -558,7 +595,7 @@ class SDFGBuilder:
 
         def visit_StencilImplementation(self, node: gt_ir.StencilImplementation):
             self.fields = node.fields
-            self.variables = node.variables
+            self.parameters = node.parameters
             for field in node.fields.values():
                 if field.name in node.unreferenced:
                     continue
@@ -576,7 +613,7 @@ class SDFGBuilder:
                         field.name,
                         strides=(I_stride, J_stride, K_stride),
                         shape=shape,
-                        dtype=field.data_type.dtype.type,
+                        dtype=dace.dtypes.typeclass(np.dtype(field.data_type.dtype).type),
                     )
                 else:
                     assert field.name in node.temporary_fields
@@ -584,11 +621,14 @@ class SDFGBuilder:
                     self.sdfg.add_transient(
                         field.name,
                         shape=shape,
-                        dtype=field.data_type.dtype.type,
+                        dtype=dace.dtypes.typeclass(np.dtype(field.data_type.dtype).type),
                         lifetime=dace.dtypes.AllocationLifetime.Persistent,
                     )
             for k, v in node.parameters.items():
-                self.sdfg.add_symbol(local_name(k, None, False), v.data_type.dtype.type)
+                self.sdfg.add_symbol(
+                    local_name(k, None, False),
+                    dace.dtypes.typeclass(np.dtype(v.data_type.dtype).type),
+                )
             self.generic_visit(node)
 
     @classmethod

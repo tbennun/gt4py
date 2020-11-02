@@ -6,7 +6,7 @@ import dace
 import dace.codegen.instrumentation
 import numpy as np
 from dace.codegen.codegen import generate_code
-from dace.codegen.compiler import CompiledSDFG, ReloadableDLL
+from dace.codegen.compiler import generate_program_folder
 
 import gt4py.analysis as gt_analysis
 from gt4py import backend as gt_backend
@@ -324,22 +324,23 @@ class DaceBackend(gt_backend.BasePyExtBackend):
         dace_build_path = os.path.relpath(self.pyext_build_dir_path)
         os.makedirs(dace_build_path, exist_ok=True)
 
-        save = options.backend_opts.get("save_intermediate", False)
-        save = True
+        save = options.backend_opts.get("save_intermediate", True)
         optimizer = options.backend_opts.get("optimizer", self.DEFAULT_OPTIMIZER)
         if "optimizer" in options.backend_opts:
             options.backend_opts["optimizer"] = optimizer.__class__.__name__
         validate = options.backend_opts.get("validate", True)
 
-        from dace.transformation.dataflow.merge_arrays import InMergeArrays
-
         if save:
             sdfg.save(dace_build_path + os.path.sep + "00_raw.sdfg")
 
-        sdfg.apply_transformations_repeated(InMergeArrays)
+        from dace.transformation.dataflow.merge_arrays import InMergeArrays
         from dace.transformation.interstate import StateFusion
 
-        sdfg.apply_transformations_repeated([StateFusion], strict=True, validate=False)
+        from gt4py.backend.dace.sdfg.transforms import PruneTransientOutputs
+
+        sdfg.apply_transformations_repeated(PruneTransientOutputs, validate=False)
+        sdfg.apply_transformations_repeated(InMergeArrays, validate=False)
+        sdfg.apply_transformations_repeated(StateFusion, strict=True, validate=False)
 
         if save:
             sdfg.save(dace_build_path + os.path.sep + "01_fused_states.sdfg")
@@ -350,6 +351,7 @@ class DaceBackend(gt_backend.BasePyExtBackend):
             sdfg.save(dace_build_path + os.path.sep + "02_library_nodes_optimized.sdfg")
 
         sdfg.expand_library_nodes()
+
         from dace.transformation.interstate import InlineSDFG
 
         sdfg.apply_transformations_repeated([InlineSDFG], validate=False)
@@ -380,7 +382,8 @@ class DaceBackend(gt_backend.BasePyExtBackend):
             sd.specialize(specialize_dict)
 
         sdfg.build_folder = os.path.abspath(dace_build_path)
-        program_folder = dace.codegen.compiler.generate_program_folder(
+        sdfg.validate()
+        program_folder = generate_program_folder(
             sdfg=sdfg, code_objects=generate_code(sdfg), out_path=dace_build_path
         )
         assert program_folder == dace_build_path

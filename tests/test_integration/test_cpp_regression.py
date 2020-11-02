@@ -263,9 +263,7 @@ def run_large_k_interval(backend, id_version, domain):
         )
 
 
-@pytest.mark.parametrize(
-    ["backend", "function"], itertools.product(INTERNAL_CPU_BACKENDS, REGISTRY)
-)
+@pytest.mark.parametrize(["backend", "function"], itertools.product(CPU_BACKENDS, REGISTRY))
 def test_cpp_regression_cpu(backend, id_version, function):
     function(gt_backend.from_name(backend), id_version)
 

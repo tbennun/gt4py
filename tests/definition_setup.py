@@ -59,7 +59,7 @@ def init_implementation_from_definition(definition: StencilDefinition) -> Stenci
         api_signature=[],
         domain=definition.domain,
         fields={},
-        parameters={},
+        variables={},
         multi_stages=[],
         fields_extents={},
         unreferenced=[],
