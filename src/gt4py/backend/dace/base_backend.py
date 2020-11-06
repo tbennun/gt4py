@@ -55,25 +55,10 @@ class DacePyModuleGenerator(gt_backend.BaseModuleGenerator):
 import functools
 import ctypes
 import os
-import weakref
 
 dace_lib = ctypes.CDLL("{self.dace_ext_lib}")
 """
         return source
-
-    def generate_class_members(self):
-        sources = gt_text.TextBlock(
-            indent_size=gt_backend.BaseModuleGenerator.TEMPLATE_INDENT_SIZE
-        )
-        dummy_args = ", ".join("None" for _ in self.sdfg.arglist())
-        source = f"""
-def __init__(self, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-    dace_lib["__dace_init_{self.sdfg.name}"]({dummy_args})
-    weakref.finalize(self, dace_lib["__dace_exit_{self.sdfg.name}"], {dummy_args})
-"""
-        sources.extend(source.splitlines())
-        return sources.text
 
     def generate_implementation(self):
         sources = gt_text.TextBlock(
@@ -150,7 +135,9 @@ assert not {name}_interface['data'][1] # assert not readonly
                 + """
 if exec_info is not None:
     exec_info['pyext_program_start_time'] = time.perf_counter()
+dace_lib['__dace_init_{program_name}']({run_args})
 dace_lib['__program_{program_name}']({run_args})
+dace_lib['__dace_exit_{program_name}']({run_args})
 if exec_info is not None:
     exec_info['pyext_program_end_time'] = time.perf_counter()
     path = os.path.join('{build_path}', 'perf')
