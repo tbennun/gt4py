@@ -1727,21 +1727,35 @@ class OnTheFlyMapFusion(Transformation):
         return offsets
 
     @staticmethod
-    def _copy_first_map_contents(state, first_map_entry, first_map_exit):
+    def _copy_first_map_contents(sdfg, state, first_map_entry, first_map_exit):
         nodes = list(state.all_nodes_between(first_map_entry, first_map_exit) - {first_map_entry})
         new_nodes = [copy.deepcopy(node) for node in nodes]
+        tmp_map = dict()
         for node in new_nodes:
+            if isinstance(node, dace.nodes.AccessNode):
+                data = sdfg.arrays[node.data]
+                if isinstance(data, dace.data.Scalar) and data.transient:
+                    tmp_name = sdfg.temp_data_name()
+                    sdfg.add_scalar(tmp_name, data.dtype, transient=True)
+                    tmp_map[node.data] = tmp_name
+                    node.data = tmp_name
             state.add_node(node)
         id_map = {state.node_id(old): state.node_id(new) for old, new in zip(nodes, new_nodes)}
 
-        def map(node):
+        def map_node(node):
             return state.node(id_map[state.node_id(node)])
+
+        def map_memlet(memlet):
+            memlet = copy.deepcopy(memlet)
+            memlet.data = tmp_map.get(memlet.data, memlet.data)
+            return memlet
 
         for edge in state.edges():
             if edge.src in nodes or edge.dst in nodes:
-                src = map(edge.src) if edge.src in nodes else edge.src
-                dst = map(edge.dst) if edge.dst in nodes else edge.dst
-                state.add_edge(src, edge.src_conn, dst, edge.dst_conn, copy.deepcopy(edge.data))
+                src = map_node(edge.src) if edge.src in nodes else edge.src
+                dst = map_node(edge.dst) if edge.dst in nodes else edge.dst
+                edge_data = map_memlet(edge.data)
+                state.add_edge(src, edge.src_conn, dst, edge.dst_conn, edge_data)
 
         return new_nodes
 
@@ -1758,7 +1772,7 @@ class OnTheFlyMapFusion(Transformation):
         # Replicate first map tasklets once for each read offset access and
         # connect them to other tasklets accordingly
         for offset, edges in read_offsets.items():
-            nodes = self._copy_first_map_contents(state, first_map_entry, first_map_exit)
+            nodes = self._copy_first_map_contents(sdfg, state, first_map_entry, first_map_exit)
             tmp_name = sdfg.temp_data_name()
             sdfg.add_scalar(tmp_name, array.dtype, transient=True)
             tmp_access = state.add_access(tmp_name)
