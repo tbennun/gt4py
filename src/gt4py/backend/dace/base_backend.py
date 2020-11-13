@@ -19,7 +19,7 @@ from .sdfg.builder import SDFGBuilder
 def dace_layout(mask):
     ctr = iter(range(sum(mask)))
     layout = [next(ctr) if m else None for m in mask]
-    return tuple(layout)
+    return tuple(layout)[::-1]
 
 
 def dace_is_compatible_layout(field):
