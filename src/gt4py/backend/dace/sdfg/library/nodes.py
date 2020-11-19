@@ -171,7 +171,7 @@ class StencilLibraryNode(dace.library.LibraryNode):
         "read_accessors -> tasklet -> write_accessors",
     )
     loop_order = dace.properties.Property(
-        dtype=str, allow_none=False, default="IJK", desc="order of loops, permutation of 'IJK'"
+        dtype=str, allow_none=True, default=None, desc="order of loops, permutation of 'IJK'"
     )
 
     def __init__(

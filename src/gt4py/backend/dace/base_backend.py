@@ -286,7 +286,7 @@ class DaceBackend(gt_backend.BasePyExtBackend):
         sdfg = SDFGBuilder.apply(implementation_ir)
         from gt4py.backend.dace.sdfg.library.nodes import StencilLibraryNode
 
-        comp_layout = options.backend_opts.get("computation_layout", "JKI")
+        comp_layout = options.backend_opts.get("computation_layout", None)
         for name, array in sdfg.arrays.items():
             import dace.data
 
@@ -302,7 +302,8 @@ class DaceBackend(gt_backend.BasePyExtBackend):
                 for state in sdfg.nodes():
                     for node in state.nodes():
                         if isinstance(node, StencilLibraryNode):
-                            node.loop_order = comp_layout
+                            if comp_layout:
+                                node.loop_order = comp_layout
 
                             for interval in node.intervals:
                                 if name in interval.sdfg.arrays:

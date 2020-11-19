@@ -538,10 +538,16 @@ class StencilExpander:
         self._input_extents = [int.input_extents for int in self.library_node.intervals]
         self._k_ranges = [int.k_interval for int in self.library_node.intervals]
 
-        for variable in reversed(self.library_node.loop_order):
+        if self.library_node.loop_order:
+            loop_order = self.library_node.loop_order
+        elif self.library_node.iteration_order == gt_ir.IterationOrder.PARALLEL:
+            loop_order = "KJI"
+        else:
+            loop_order = "JIK"
+        for variable in reversed(loop_order):
             if (
                 variable in ["k", "K"]
-                and self.library_node.iteration_order is not gt_ir.IterationOrder.PARALLEL
+                and self.library_node.iteration_order != gt_ir.IterationOrder.PARALLEL
             ) or variable.islower():
                 self._loop(variable=variable.upper())
             else:
