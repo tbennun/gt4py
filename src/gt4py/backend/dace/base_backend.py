@@ -39,10 +39,7 @@ class DacePyModuleGenerator(gt_backend.BaseModuleGenerator):
         super().__init__()
 
     def __call__(
-        self,
-        args_data: Dict[str, Any],
-        builder: Optional["StencilBuilder"] = None,
-        **kwargs: Any,
+        self, args_data: Dict[str, Any], builder: Optional["StencilBuilder"] = None, **kwargs: Any
     ) -> str:
         self.dace_ext_lib = kwargs["dace_ext_lib"].replace("\\", "\\\\")
         self.dace_build_path = kwargs["dace_build_path"].replace("\\", "\\\\")

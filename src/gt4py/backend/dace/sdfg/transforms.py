@@ -230,9 +230,7 @@ class PruneTransientOutputs(Transformation):
 
         if not isinstance(library_node, library.StencilLibraryNode):
             return False
-        access_node: nodes.AccessNode = graph.node(
-            candidate[PruneTransientOutputs._access_node]
-        )
+        access_node: nodes.AccessNode = graph.node(candidate[PruneTransientOutputs._access_node])
 
         edges = graph.edges_between(library_node, access_node)
         if len(edges) != 1:
@@ -433,8 +431,7 @@ class TaskletAsKLoop(Transformation):
         for name in set(
             n.data
             for n in graph.nodes()
-            if isinstance(n, nodes.AccessNode)
-            and n.access == dace.dtypes.AccessType.WriteOnly
+            if isinstance(n, nodes.AccessNode) and n.access == dace.dtypes.AccessType.WriteOnly
         ):
             nsdfg.add_datadesc(out_prefix + name, copy.deepcopy(sdfg.arrays[name]))
 
@@ -992,23 +989,32 @@ class LoopBufferCache(DetectLoop):
 
         fill_state = sdfg.add_state(sdfg.label + "_fill_state")
         edge = sdfg.edges_between(before_state, guard)[0]
-        sdfg.add_edge(before_state, fill_state, dace.InterstateEdge(condition=edge.data.condition,
-                                                                    assignments=edge.data.assignments))
+        sdfg.add_edge(
+            before_state,
+            fill_state,
+            dace.InterstateEdge(condition=edge.data.condition, assignments=edge.data.assignments),
+        )
         sdfg.add_edge(fill_state, guard, dace.InterstateEdge())
         sdfg.remove_edge(edge)
 
         load_state = sdfg.add_state(sdfg.label + "_load_state")
         edge = sdfg.edges_between(guard, loop_state)[0]
-        sdfg.add_edge(guard, load_state, dace.InterstateEdge(condition=edge.data.condition,
-                                                             assignments=edge.data.assignments))
+        sdfg.add_edge(
+            guard,
+            load_state,
+            dace.InterstateEdge(condition=edge.data.condition, assignments=edge.data.assignments),
+        )
         sdfg.add_edge(load_state, loop_state, dace.InterstateEdge())
         sdfg.remove_edge(edge)
 
         store_shift_state = sdfg.add_state(sdfg.label + "_store_shift_state")
         edge = sdfg.edges_between(loop_state, guard)[0]
         sdfg.add_edge(loop_state, store_shift_state, dace.InterstateEdge())
-        sdfg.add_edge(store_shift_state, guard, dace.InterstateEdge(condition=edge.data.condition,
-                                                                    assignments=edge.data.assignments))
+        sdfg.add_edge(
+            store_shift_state,
+            guard,
+            dace.InterstateEdge(condition=edge.data.condition, assignments=edge.data.assignments),
+        )
         sdfg.remove_edge(edge)
 
         for name, array in list(sdfg.arrays.items()):
@@ -1039,27 +1045,41 @@ class LoopBufferCache(DetectLoop):
                 write = fill_state.add_write(f"_loc_buf_{name}")
                 src_subset = copy.deepcopy(subset_info["unified_subset"])
                 dst_subset = relative(src_subset)
-                fill_state.add_edge(read, None, write, None,
-                        dace.Memlet(data=name, subset=src_subset,
-                                    other_subset=dst_subset))
+                fill_state.add_edge(
+                    read,
+                    None,
+                    write,
+                    None,
+                    dace.Memlet(data=name, subset=src_subset, other_subset=dst_subset),
+                )
 
                 read = load_state.add_read(name)
                 write = load_state.add_write(f"_loc_buf_{name}")
                 select_load = min if rng[2] < 0 else max
-                src_subset = copy.deepcopy(select_load(subset_info["in_subsets"], key=lambda s: s[var_idx]))
+                src_subset = copy.deepcopy(
+                    select_load(subset_info["in_subsets"], key=lambda s: s[var_idx])
+                )
                 dst_subset = relative(src_subset)
-                load_state.add_edge(read, None, write, None,
-                        dace.Memlet(data=name, subset=src_subset,
-                                    other_subset=dst_subset))
+                load_state.add_edge(
+                    read,
+                    None,
+                    write,
+                    None,
+                    dace.Memlet(data=name, subset=src_subset, other_subset=dst_subset),
+                )
 
             read = store_shift_state.add_read(f"_loc_buf_{name}")
             sdfg.add_datadesc(f"_tmp_loc_buf_{name}", sdfg.arrays[f"_loc_buf_{name}"])
             write = store_shift_state.add_access(f"_tmp_loc_buf_{name}")
             src_subset = relative(subset_info["unified_subset"])
             dst_subset = src_subset
-            store_shift_state.add_edge(read, None, write, None,
-                    dace.Memlet(data=f"_loc_buf_{name}", subset=src_subset,
-                                other_subset=dst_subset))
+            store_shift_state.add_edge(
+                read,
+                None,
+                write,
+                None,
+                dace.Memlet(data=f"_loc_buf_{name}", subset=src_subset, other_subset=dst_subset),
+            )
 
             read = write
             write = store_shift_state.add_write(f"_loc_buf_{name}")
@@ -1069,19 +1089,30 @@ class LoopBufferCache(DetectLoop):
             dst_subset.ranges[var_idx] = 0, subset_info["length"] - 2, 1
             if rng[2] < 0:
                 src_subset, dst_subset = dst_subset, src_subset
-            store_shift_state.add_edge(read, None, write, None,
-                    dace.Memlet(data=f"_tmp_loc_buf_{name}",
-                                subset=src_subset, other_subset=dst_subset))
+            store_shift_state.add_edge(
+                read,
+                None,
+                write,
+                None,
+                dace.Memlet(
+                    data=f"_tmp_loc_buf_{name}", subset=src_subset, other_subset=dst_subset
+                ),
+            )
 
             if name in stores:
                 write = store_shift_state.add_write(name)
                 assert len(subset_info["out_subsets"]) == 1
                 dst_subset = copy.deepcopy(next(iter(subset_info["out_subsets"])))
                 src_subset = relative(dst_subset)
-                store_shift_state.add_edge(read, None, write, None,
-                        dace.Memlet(data=f"_tmp_loc_buf_{name}", subset=src_subset,
-                                    other_subset=dst_subset))
-
+                store_shift_state.add_edge(
+                    read,
+                    None,
+                    write,
+                    None,
+                    dace.Memlet(
+                        data=f"_tmp_loc_buf_{name}", subset=src_subset, other_subset=dst_subset
+                    ),
+                )
 
             for edge in loop_state.edges():
                 if edge.data.data == name:
@@ -1268,6 +1299,7 @@ class OnTheFlyMapFusion(Transformation):
             state.all_nodes_between(first_map_entry, first_map_exit) | {first_map_exit}
         )
 
+
 @registry.autoregister_params(singlestate=True)
 class IJMapFusion(Transformation):
     map_entry = PatternNode(nodes.EntryNode)
@@ -1278,11 +1310,7 @@ class IJMapFusion(Transformation):
 
     @staticmethod
     def expressions():
-        return [
-            sdutil.node_path_graph(
-                IJMapFusion.map_entry
-            )
-        ]
+        return [sdutil.node_path_graph(IJMapFusion.map_entry)]
 
     @staticmethod
     def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
@@ -1320,7 +1348,7 @@ class IJMapFusion(Transformation):
         new_entry = nodes.MapEntry(map=copy.deepcopy(map_entries[0].map))
         new_exit = nodes.MapExit(map=copy.deepcopy(map_entries[0].map))
 
-        nsdfg = dace.SDFG('ij_fused')
+        nsdfg = dace.SDFG("ij_fused")
         nsdfg.symbols = sdfg.symbols
 
         sources = {n.data for n in graph.source_nodes() if isinstance(n, nodes.AccessNode)}
@@ -1345,17 +1373,33 @@ class IJMapFusion(Transformation):
             if isinstance(node, nodes.MapEntry):
                 remove.add(node)
                 in_edges = {e.data.data: e for e in ngraph.in_edges(node)}
-                out_edges =  {e.data.data: e for e in ngraph.out_edges(node)}
-                for (inp, in_edge), (out, out_edge) in zip(sorted(in_edges.items()), sorted(out_edges.items())):
+                out_edges = {e.data.data: e for e in ngraph.out_edges(node)}
+                for (inp, in_edge), (out, out_edge) in zip(
+                    sorted(in_edges.items()), sorted(out_edges.items())
+                ):
                     assert inp == out
-                    ngraph.add_edge(in_edge.src, in_edge.src_conn, out_edge.dst, out_edge.dst_conn, out_edge.data)
+                    ngraph.add_edge(
+                        in_edge.src,
+                        in_edge.src_conn,
+                        out_edge.dst,
+                        out_edge.dst_conn,
+                        out_edge.data,
+                    )
             elif isinstance(node, nodes.MapExit):
                 remove.add(node)
                 in_edges = {e.data.data: e for e in ngraph.in_edges(node)}
-                out_edges =  {e.data.data: e for e in ngraph.out_edges(node)}
-                for (inp, in_edge), (out, out_edge) in zip(sorted(in_edges.items()), sorted(out_edges.items())):
+                out_edges = {e.data.data: e for e in ngraph.out_edges(node)}
+                for (inp, in_edge), (out, out_edge) in zip(
+                    sorted(in_edges.items()), sorted(out_edges.items())
+                ):
                     assert inp == out
-                    ngraph.add_edge(in_edge.src, in_edge.src_conn, out_edge.dst, out_edge.dst_conn, in_edge.data)
+                    ngraph.add_edge(
+                        in_edge.src,
+                        in_edge.src_conn,
+                        out_edge.dst,
+                        out_edge.dst_conn,
+                        in_edge.data,
+                    )
         ngraph.remove_nodes_from(remove)
 
         for edge in ngraph.edges():
@@ -1370,6 +1414,7 @@ class IJMapFusion(Transformation):
                     if isinstance(node, nodes.NestedSDFG):
                         fix_sdfg_list_recursive(node.sdfg)
             sdfg.update_sdfg_list([])
+
         fix_sdfg_list_recursive(sdfg)
         nsdfg.validate()
 
@@ -1380,14 +1425,22 @@ class IJMapFusion(Transformation):
 
         for inp in nsdfg_node.in_connectors:
             access = nodes.AccessNode(inp, dace.AccessType.ReadOnly)
-            graph.add_memlet_path(access, new_entry, nsdfg_node,
-                                  memlet=dace.Memlet(data=inp, subset="i,j,0:K"),
-                                  dst_conn=inp)
+            graph.add_memlet_path(
+                access,
+                new_entry,
+                nsdfg_node,
+                memlet=dace.Memlet(data=inp, subset="i,j,0:K"),
+                dst_conn=inp,
+            )
         for out in nsdfg_node.out_connectors:
             access = nodes.AccessNode(out, dace.AccessType.WriteOnly)
-            graph.add_memlet_path(nsdfg_node, new_exit, access,
-                                  memlet=dace.Memlet(data=out, subset="i,j,0:K"),
-                                  src_conn=out)
+            graph.add_memlet_path(
+                nsdfg_node,
+                new_exit,
+                access,
+                memlet=dace.Memlet(data=out, subset="i,j,0:K"),
+                src_conn=out,
+            )
         sdfg.validate()
 
         return sdfg
