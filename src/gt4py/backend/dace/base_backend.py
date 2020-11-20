@@ -57,6 +57,7 @@ import ctypes
 import os
 
 dace_lib = ctypes.CDLL("{self.dace_ext_lib}")
+initialized = False
 """
         return source
 
@@ -135,8 +136,15 @@ assert not {name}_interface['data'][1] # assert not readonly
                 + """
 if exec_info is not None:
     exec_info['pyext_program_start_time'] = time.perf_counter()
+global initialized
+if not initialized:
+    # for benchmarking: uncomment the following line
+    # dace_lib['__dace_init_{program_name}']({run_args})
+    initialized = True
+# for benchmarking: comment the following line
 dace_lib['__dace_init_{program_name}']({run_args})
 dace_lib['__program_{program_name}']({run_args})
+# for benchmarking: comment the following line
 dace_lib['__dace_exit_{program_name}']({run_args})
 if exec_info is not None:
     exec_info['pyext_program_end_time'] = time.perf_counter()
