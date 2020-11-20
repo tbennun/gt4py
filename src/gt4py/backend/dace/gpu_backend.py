@@ -32,35 +32,25 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         return sdfg
 
     def transform_optimize(self, sdfg):
-
         import dace
         from dace.transformation.dataflow import MapCollapse
 
         from gt4py.backend.dace.sdfg.transforms import (
             OnTheFlyMapFusion,
-            PrefetchingKCachesTransform,
+            LoopBufferCache,
+            IJMapFusion,
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
+        sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
         sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
-
-        sdfg.apply_strict_transformations(validate=False)
+        # sdfg.apply_strict_transformations(validate=False)
 
         for name, array in sdfg.arrays.items():
             if array.transient:
                 array.lifetime = dace.dtypes.AllocationLifetime.Persistent
 
-        for state in sdfg.nodes():
-            for node in state.nodes():
-                if isinstance(node, dace.nodes.NestedSDFG):
-                    kcache_subgraph = {
-                        PrefetchingKCachesTransform._nsdfg_node: state.node_id(node)
-                    }
-                    trafo = PrefetchingKCachesTransform(
-                        sdfg.sdfg_id, sdfg.node_id(state), kcache_subgraph, 0
-                    )
-                    trafo.storage_type = dace.dtypes.StorageType.Register
-                    trafo.apply(sdfg)
+        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
 
         from dace.sdfg.graph import SubgraphView
         from dace.transformation.subgraph.subgraph_fusion import SubgraphFusion

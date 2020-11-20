@@ -2,11 +2,15 @@ import copy
 from collections import defaultdict
 
 import dace
-from dace import registry, symbolic
+from dace import registry
 from dace.properties import Property, make_properties
-from dace.sdfg import SDFG, nodes
-from dace.sdfg import utils as sdutils
-from dace.transformation.transformation import Transformation
+from dace.sdfg import SDFG, nodes, utils as sdutil
+
+from dace.transformation.transformation import Transformation, PatternNode
+from dace.transformation.interstate.loop_detection import DetectLoop, find_for_loop
+from dace.transformation.interstate.loop_unroll import LoopUnroll
+
+from gt4py.backend.dace.sdfg import library
 
 
 def global_ij_tiling(sdfg, tile_size=(8, 8)):
@@ -14,7 +18,7 @@ def global_ij_tiling(sdfg, tile_size=(8, 8)):
     output_arrays = dict()
     for state in sdfg.nodes():
         for node in state.nodes():
-            if isinstance(node, dace.nodes.AccessNode):
+            if isinstance(node, nodes.AccessNode):
                 if (
                     node.access is dace.AccessType.ReadOnly
                     or node.access is dace.AccessType.ReadWrite
@@ -181,19 +185,10 @@ def global_ij_tiling(sdfg, tile_size=(8, 8)):
             array.storage = dace.dtypes.StorageType.CPU_ThreadLocal
 
 
-import dace.sdfg.utils
-from dace import nodes
-from dace.properties import Property, ShapeProperty, make_properties
-from dace.transformation.transformation import Transformation
-
-import gt4py
-from gt4py.backend.dace.sdfg import library
-
-
 @registry.autoregister_params(singlestate=True)
 class PruneTransientOutputs(Transformation):
 
-    _library_node = dace.nodes.LibraryNode("")
+    _library_node = nodes.LibraryNode("")
     _access_node = nodes.AccessNode("")
 
     @staticmethod
@@ -229,13 +224,13 @@ class PruneTransientOutputs(Transformation):
         # TODO improvement: state-graphs that are not just sequences
         # TODO improvement: can still apply if read is shadowed by another write
 
-        library_node: dace.nodes.LibraryNode = graph.node(
+        library_node: nodes.LibraryNode = graph.node(
             candidate[PruneTransientOutputs._library_node]
         )
 
         if not isinstance(library_node, library.StencilLibraryNode):
             return False
-        access_node: dace.nodes.AccessNode = graph.node(
+        access_node: nodes.AccessNode = graph.node(
             candidate[PruneTransientOutputs._access_node]
         )
 
@@ -255,7 +250,7 @@ class PruneTransientOutputs(Transformation):
         sorted_accesses = [access_node] + [
             node
             for node in nx.algorithms.dag.topological_sort(graph.nx)
-            if isinstance(node, dace.nodes.AccessNode) and node.data == access_node.data
+            if isinstance(node, nodes.AccessNode) and node.data == access_node.data
         ]
 
         if not PruneTransientOutputs._check_reads(graph, candidate_subset, sorted_accesses):
@@ -271,7 +266,7 @@ class PruneTransientOutputs(Transformation):
             sorted_accesses = [
                 node
                 for node in nx.algorithms.dag.topological_sort(state.nx)
-                if isinstance(node, dace.nodes.AccessNode) and node.data == access_node.data
+                if isinstance(node, nodes.AccessNode) and node.data == access_node.data
             ]
 
             if not PruneTransientOutputs._check_reads(state, candidate_subset, sorted_accesses):
@@ -286,7 +281,7 @@ class PruneTransientOutputs(Transformation):
         library_node: library.StencilLibraryNode = graph.node(
             self.subgraph[PruneTransientOutputs._library_node]
         )
-        access_node: dace.nodes.AccessNode = graph.node(
+        access_node: nodes.AccessNode = graph.node(
             self.subgraph[PruneTransientOutputs._access_node]
         )
         edges = graph.edges_between(library_node, access_node)
@@ -304,9 +299,9 @@ class PruneTransientOutputs(Transformation):
             # if data in int.input_extents:
             #     del int.input_extents[data]
             for state in int.sdfg.nodes():
-                tasklets = [n for n in state.nodes() if isinstance(n, dace.nodes.Tasklet)]
+                tasklets = [n for n in state.nodes() if isinstance(n, nodes.Tasklet)]
                 assert len(tasklets) == 1
-                tasklet: dace.nodes.Tasklet = tasklets[0]
+                tasklet: nodes.Tasklet = tasklets[0]
                 remove_connectors = set()
                 for conn in tasklet.out_connectors:
                     if conn.startswith(f"_gt_loc_out__{data}_"):
@@ -317,7 +312,7 @@ class PruneTransientOutputs(Transformation):
                 output_accessors = [
                     n
                     for n in state.nodes()
-                    if isinstance(n, dace.nodes.AccessNode)
+                    if isinstance(n, nodes.AccessNode)
                     and n.access != dace.dtypes.AccessType.ReadOnly
                     and n.data == data
                 ]
@@ -333,7 +328,7 @@ class PruneTransientOutputs(Transformation):
                         [
                             n
                             for n in state.nodes()
-                            if isinstance(n, dace.nodes.AccessNode) and n.data == data
+                            if isinstance(n, nodes.AccessNode) and n.data == data
                         ]
                     )
                     == 0
@@ -348,7 +343,7 @@ class PruneTransientOutputs(Transformation):
         remove = True
         for state in sdfg.nodes():
             for node in state.nodes():
-                if isinstance(node, dace.nodes.AccessNode) and node.data == data:
+                if isinstance(node, nodes.AccessNode) and node.data == data:
                     remove = False
         if remove:
             sdfg.remove_data(data)
@@ -396,9 +391,9 @@ class TaskletAsKLoop(Transformation):
 
     def apply(self, sdfg):
         graph: dace.sdfg.SDFGState = sdfg.nodes()[self.state_id]
-        map_entry: dace.nodes.MapEntry = graph.nodes()[self.subgraph[TaskletAsKLoop._map_entry]]
-        tasklet: dace.nodes.Tasklet = graph.nodes()[self.subgraph[TaskletAsKLoop._tasklet]]
-        map_exit: dace.nodes.MapExit = graph.nodes()[self.subgraph[TaskletAsKLoop._map_exit]]
+        map_entry: nodes.MapEntry = graph.nodes()[self.subgraph[TaskletAsKLoop._map_entry]]
+        tasklet: nodes.Tasklet = graph.nodes()[self.subgraph[TaskletAsKLoop._tasklet]]
+        map_exit: nodes.MapExit = graph.nodes()[self.subgraph[TaskletAsKLoop._map_exit]]
 
         k_min, k_max = self._k_range()
         # fix outer edges to ij map
@@ -432,13 +427,13 @@ class TaskletAsKLoop(Transformation):
         for name in set(
             n.data
             for n in graph.nodes()
-            if isinstance(n, dace.nodes.AccessNode) and n.access == dace.dtypes.AccessType.ReadOnly
+            if isinstance(n, nodes.AccessNode) and n.access == dace.dtypes.AccessType.ReadOnly
         ):
             nsdfg.add_datadesc(in_prefix + name, copy.deepcopy(sdfg.arrays[name]))
         for name in set(
             n.data
             for n in graph.nodes()
-            if isinstance(n, dace.nodes.AccessNode)
+            if isinstance(n, nodes.AccessNode)
             and n.access == dace.dtypes.AccessType.WriteOnly
         ):
             nsdfg.add_datadesc(out_prefix + name, copy.deepcopy(sdfg.arrays[name]))
@@ -502,7 +497,7 @@ class TaskletAsKLoop(Transformation):
                     #     [
                     #         n
                     #         for n in graph.nodes()
-                    #         if isinstance(n, dace.nodes.AccessNode)
+                    #         if isinstance(n, nodes.AccessNode)
                     #         and n.access == dace.AccessType.ReadOnly
                     #         and n.data == e.data.data
                     #     ][0],
@@ -554,7 +549,7 @@ class TaskletAsKLoop(Transformation):
                     #     [
                     #         n
                     #         for n in graph.nodes()
-                    #         if isinstance(n, dace.nodes.AccessNode)
+                    #         if isinstance(n, nodes.AccessNode)
                     #         and n.access == dace.AccessType.WriteOnly
                     #         and n.data == e.data.data
                     #     ][0],
@@ -629,10 +624,6 @@ class TaskletAsKLoop(Transformation):
         #     )
 
 
-from dace.transformation.interstate.loop_detection import DetectLoop
-from dace.transformation.interstate.loop_unroll import LoopUnroll
-
-
 class EnhancedDetectLoop(DetectLoop):
     """Detects a for-loop construct from an SDFG, with added utility function for finding
     context states."""
@@ -651,7 +642,7 @@ class EnhancedDetectLoop(DetectLoop):
         rng = LoopUnroll._loop_range(itervar, guard_inedges, condition)
 
         # Find the state prior to the loop
-        if rng[0] == symbolic.pystr_to_symbolic(guard_inedges[0].data.assignments[itervar]):
+        if rng[0] == dace.symbolic.pystr_to_symbolic(guard_inedges[0].data.assignments[itervar]):
             before_state: dace.SDFGState = guard_inedges[0].src
             last_state: dace.SDFGState = guard_inedges[1].src
         else:
@@ -659,9 +650,6 @@ class EnhancedDetectLoop(DetectLoop):
             last_state: dace.SDFGState = guard_inedges[0].src
 
         return guard, begin, last_state, before_state, after_state
-
-
-from dace import symbolic
 
 
 @registry.autoregister
@@ -849,161 +837,32 @@ def outer_k_loop_to_inner_map(sdfg: dace.SDFG, state: dace.SDFGState):
     sdfg.remove_node(state)
 
 
-from dace.transformation.interstate import LoopPeeling
-
-
 @registry.autoregister
 @make_properties
-class AlwaysApplyLoopPeeling(LoopPeeling):
-    @staticmethod
-    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
-        return True
-
-
-@registry.autoregister
-@make_properties
-class PrefetchingKCachesTransform(Transformation):
-    _nsdfg_node = dace.nodes.LibraryNode("")
-
-    storage_type = dace.properties.Property(
-        dtype=dace.dtypes.StorageType,
-        default=dace.dtypes.StorageType.Default,
-        desc="the StorageType of local buffers",
-    )
-    arrays = dace.properties.Property(
-        dtype=list, default=None, allow_none=True, desc="The arrays to apply the trafo on."
-    )
-
-    @staticmethod
-    def expressions():
-        return [dace.sdfg.utils.node_path_graph(PrefetchingKCachesTransform._nsdfg_node)]
-
-    @staticmethod
-    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
-        return True
-
-    def apply(self, sdfg):
-        graph: dace.sdfg.SDFGState = sdfg.nodes()[self.state_id]
-        nsdfg = graph.node(self.subgraph[PrefetchingKCachesTransform._nsdfg_node])
-        apply_count = 0
-        for state in nsdfg.sdfg.nodes():
-            for node in state.nodes():
-                if isinstance(node, dace.nodes.NestedSDFG):
-                    kcache_subgraph = {
-                        PrefetchingKCachesTransform._nsdfg_node: state.node_id(node)
-                    }
-                    trafo = PrefetchingKCachesTransform(
-                        nsdfg.sdfg.sdfg_id, nsdfg.sdfg.node_id(state), kcache_subgraph, 0
-                    )
-                    trafo.storage_type = dace.dtypes.StorageType.CPU_Heap
-                    trafo.apply(nsdfg.sdfg)
-                    apply_count += 1
-
-        if apply_count > 0:
-            return
-        nsdfg_node = nsdfg
-        names = dict()
-        for name, array in dict(nsdfg_node.sdfg.arrays).items():
-            if self.arrays is not None and name not in self.arrays:
-                continue
-            store = False
-            outer_edges = [e for e in graph.out_edges(nsdfg_node) if e.data.data == name]
-            for edge in outer_edges:
-                path = graph.memlet_path(edge)
-                if not (
-                    isinstance(path[-1].dst, dace.nodes.AccessNode)
-                    and path[-1].dst.access != dace.dtypes.AccessType.ReadOnly
-                    and len(graph.out_edges(path[-1].dst)) == 0
-                    and sdfg.arrays[name].transient
-                ):
-                    store = True
-            names[name] = store
-
-            if not store:
-                remove_edges = set()
-                remove_nodes = set()
-                for edge in outer_edges:
-                    path = graph.memlet_path(edge)
-                    for e in path:
-                        remove_edges.add(e)
-                    remove_nodes.add(path[-1].dst)
-                for edge in remove_edges:
-                    graph.remove_edge_and_connectors(edge)
-                for node in remove_nodes:
-                    graph.remove_node(node)
-
-        if self.arrays is None:
-            array_list = list(name for name in names.keys() if not name.startswith("__tmp"))
-        else:
-            array_list = self.arrays
-        apply_count = nsdfg_node.sdfg.apply_transformations(
-            PrefetchFieldTransform,
-            options={
-                "storage_type": self.storage_type,
-                "arrays": list(n for n in names.keys() if n in array_list),
-                "store": list(k for k, v in names.items() if v),
-            },
-            validate=False,
-        )
-
-
-@registry.autoregister
-@make_properties
-class PrefetchFieldTransform(LoopPeeling):
-
-    storage_type = dace.properties.Property(
+class LoopBufferCache(DetectLoop):
+    storage_type = Property(
         dtype=dace.dtypes.StorageType,
         default=dace.dtypes.StorageType.Default,
         desc="the StorageType of local buffers",
     )
 
-    arrays = dace.properties.Property(
-        dtype=list, default=None, allow_none=True, desc="List of  names of the array to prefetch"
-    )
-
-    store = dace.properties.Property(
-        dtype=list,
-        default=[],
-        desc="List of arrays for which to write out the results to the original array",
-    )
-
     @staticmethod
-    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
-        if not DetectLoop.can_be_applied(graph, candidate, expr_index, sdfg, strict):
-            return False
-
-        guard = graph.node(candidate[DetectLoop._loop_guard])
-        begin = graph.node(candidate[DetectLoop._loop_begin])
-
-        # Obtain iteration variable, range, and stride
-        guard_inedges = graph.in_edges(guard)
-        condition_edge = graph.edges_between(guard, begin)[0]
-        itervar = list(guard_inedges[0].data.assignments.keys())[0]
-        condition = condition_edge.data.condition_sympy()
-
-        # If loop cannot be detected, fail
-        rng = LoopUnroll._loop_range(itervar, guard_inedges, condition)
-        if not rng:
-            return False
-
-        return True
-
-    def collect_subset_info(self, state, name, var_idx):
+    def collect_subset_info(state, name, var_idx):
         in_subsets = set()
         out_subsets = set()
         for edge in state.edges():
-            if isinstance(edge.dst, dace.nodes.CodeNode) and edge.data.data == name:
+            if isinstance(edge.dst, nodes.CodeNode) and edge.data.data == name:
                 in_subsets.add(copy.deepcopy(edge.data.subset))
             if (
-                isinstance(edge.dst, dace.nodes.AccessNode)
+                isinstance(edge.dst, nodes.AccessNode)
                 and edge.dst.access == dace.dtypes.AccessType.ReadWrite
                 and edge.data.data == name
             ):
                 in_subsets.add(copy.deepcopy(edge.data.subset))
-            if isinstance(edge.src, dace.nodes.CodeNode) and edge.data.data == name:
+            if isinstance(edge.src, nodes.CodeNode) and edge.data.data == name:
                 out_subsets.add(copy.deepcopy(edge.data.subset))
             if (
-                isinstance(edge.src, dace.nodes.AccessNode)
+                isinstance(edge.src, nodes.AccessNode)
                 and edge.src.access == dace.dtypes.AccessType.ReadWrite
                 and edge.data.data == name
             ):
@@ -1014,13 +873,13 @@ class PrefetchFieldTransform(LoopPeeling):
 
         for edge in state.edges():
             if (
-                isinstance(edge.src, dace.nodes.AccessNode)
+                isinstance(edge.src, nodes.AccessNode)
                 and edge.src.access == dace.dtypes.AccessType.ReadOnly
                 and edge.data.data == name
             ):
                 outer_in_subsets.add(copy.deepcopy(edge.data.subset))
             if (
-                isinstance(edge.dst, dace.nodes.AccessNode)
+                isinstance(edge.dst, nodes.AccessNode)
                 and edge.dst.access == dace.dtypes.AccessType.WriteOnly
                 and edge.data.data == name
             ):
@@ -1028,12 +887,10 @@ class PrefetchFieldTransform(LoopPeeling):
 
         indices = set(subs.ranges[var_idx][0] for subs in in_subsets | out_subsets)
         indices |= set(subs.ranges[var_idx][1] for subs in in_subsets | out_subsets)
-        length = max(indices) - min(indices) + 3
+        length = max(indices) - min(indices) + 1
 
         outer_in_subset = None
         if len(outer_in_subsets) > 0:
-            from dace import subsets
-
             outer_in_subset = next(iter(outer_in_subsets))
             for subset in outer_in_subsets:
                 outer_in_subset = dace.subsets.union(outer_in_subset, subset)
@@ -1044,8 +901,6 @@ class PrefetchFieldTransform(LoopPeeling):
 
         outer_out_subset = None
         if len(outer_out_subsets) > 0:
-            from dace import subsets
-
             outer_out_subset = next(iter(outer_out_subsets))
             for subset in outer_out_subsets:
                 outer_out_subset = dace.subsets.union(outer_out_subset, subset)
@@ -1080,564 +935,165 @@ class PrefetchFieldTransform(LoopPeeling):
             write_idx=write_idx,
         )
 
-    @classmethod
-    def specialize_subset(cls, subset, var_idx, itervar_sym, itervar_value):
-        subset = copy.deepcopy(subset)
-        ranges = list(subset.ranges[var_idx])
-        for idx, sym_expr in enumerate(ranges):
-            ranges[idx] = sym_expr.subs(itervar_sym, itervar_value)
-        subset.ranges[var_idx] = tuple(ranges)
-        return subset
+    @staticmethod
+    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
+        if not DetectLoop.can_be_applied(graph, candidate, expr_index, sdfg, strict):
+            return False
 
-    def add_prefetch_all(
-        self, state, name, itervar, itervar_value, var_idx, subset_info, stride, offset
-    ):
-        if not subset_info["in_subsets"]:
-            return
+        guard = graph.node(candidate[DetectLoop._loop_guard])
+        begin = graph.node(candidate[DetectLoop._loop_begin])
 
-        import dace.subsets
-
-        itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
-        read_acc = state.add_read(name)
-        write_acc = state.add_write(f"_loc_buf_{name}")
-
-        outer_subset = self.specialize_subset(
-            subset_info["unified_subset"], var_idx, itervar_sym, itervar_value
-        )
-
-        local_subset = copy.deepcopy(subset_info["unified_subset"])
-        ranges = list(local_subset.ranges[var_idx])
-        min_idx = ranges[0]
-        ranges[0] = 1
-        ranges[1] += 1 - min_idx
-        local_subset.ranges[var_idx] = tuple(ranges)
-
-        state.add_edge(
-            read_acc,
-            None,
-            write_acc,
-            None,
-            dace.Memlet.simple(
-                name, subset_str=str(outer_subset), other_subset_str=str(local_subset)
-            ),
-        )
-
-    def add_store_all(
-        self, state, name, itervar, itervar_value, var_idx, subset_info, stride, offset
-    ):
-        if not subset_info["out_subsets"]:
-            return
-
-        import dace
-        import dace.subsets
-
-        itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
-        write_acc = state.add_write(name)
-        read_acc = state.add_read(f"_loc_buf_{name}")
-
-        out_subset = copy.deepcopy(next(iter(subset_info["out_subsets"])))
-        write_idx = out_subset.ranges[var_idx][0]
-
-        subset = self.specialize_subset(out_subset, var_idx, itervar_sym, itervar_value)
-
-        other_subset = copy.deepcopy(out_subset)
-        other_ranges = (
-            write_idx - subset_info["min_idx"] + 1 + offset,
-            write_idx - subset_info["min_idx"] + 1 + offset,
-            1,
-        )
-        other_subset.ranges[var_idx] = other_ranges
-
-        state.add_edge(
-            read_acc,
-            None,
-            write_acc,
-            None,
-            dace.Memlet.simple(
-                f"_loc_buf_{name}", other_subset_str=str(subset), subset_str=str(other_subset)
-            ),
-        )
-
-    def add_shift_local(
-        self,
-        state: dace.SDFGState,
-        name,
-        itervar,
-        itervar_value,
-        var_idx,
-        subset_info,
-        stride,
-        offset,
-    ):
-        sdfg: dace.SDFG = state.parent
-        read_access = state.add_read(f"_loc_buf_{name}")
-        tmp_access = state.add_access(f"_tmp_loc_buf_{name}")
-        write_access = state.add_read(f"_loc_buf_{name}")
-        sdfg.add_datadesc(f"_tmp_loc_buf_{name}", sdfg.arrays[f"_loc_buf_{name}"])
-        state.add_edge(
-            read_access,
-            None,
-            tmp_access,
-            None,
-            memlet=dace.Memlet.simple(
-                f"_loc_buf_{name}",
-                subset_str=",".join(f"0:{s}" for s in sdfg.arrays[f"_loc_buf_{name}"].shape),
-            ),
-        )
-
-        in_subset = subset_info["unified_subset"]
-        if stride > 0:
-            in_subset.ranges[var_idx] = (1, subset_info["length"] - 1, 1)
-        else:
-            in_subset.ranges[var_idx] = (0, subset_info["length"] - 2, 1)
-        other_subset = copy.deepcopy(in_subset)
-        other_subset.offset(stride, True, {var_idx})
-        state.add_edge(
-            tmp_access,
-            None,
-            write_access,
-            None,
-            memlet=dace.Memlet.simple(
-                f"_tmp_loc_buf_{name}",
-                subset_str=str(in_subset),
-                other_subset_str=str(other_subset),
-            ),
-        )
-
-    def localize_tasklet_memlets(
-        self, state, name, itervar, itervar_value, var_idx, subset_info, stride, offset
-    ):
-        itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
-
-        min_idx = None
-        for node in [
-            n
-            for n in state.nodes()
-            if isinstance(n, (dace.nodes.CodeNode, dace.nodes.EntryNode))
-            or (
-                isinstance(n, dace.nodes.AccessNode)
-                and n.access == dace.dtypes.AccessType.ReadWrite
+        loop_states = list(
+            dace.sdfg.utils.dfs_conditional(
+                graph, sources=[begin], condition=lambda _, child: child != guard
             )
-        ]:
-            for edge in [e for e in state.in_edges(node) if e.data.data == name]:
-                if min_idx is None or min_idx > edge.data.subset.ranges[var_idx][0]:
-                    min_idx = edge.data.subset.ranges[var_idx][0]
-        for node in [
-            n for n in state.nodes() if isinstance(n, (dace.nodes.CodeNode, dace.nodes.ExitNode))
-        ]:
-            for edge in [e for e in state.out_edges(node) if e.data.data == name]:
-                if min_idx is None or min_idx > edge.data.subset.ranges[var_idx][0]:
-                    min_idx = edge.data.subset.ranges[var_idx][0]
-
-        # node.data = f"_loc_buf_{name}"
-
-        # change write from tasklet
-
-        # edges = []
-        # for node in state.nodes():
-        #     # if isinstance(
-        #     #     node, (dace.nodes.CodeNode, dace.nodes.ExitNode, dace.nodes.EntryNode)
-        #     # ) or (
-        #     #     isinstance(node, dace.nodes.AccessNode)
-        #     #     and node.access != dace.dtypes.AccessType.ReadWrite
-        #     # ):
-        #     #     edges.extend([e for e in state.out_edges(node) if e.data.data == name])
-        #     #     edges.extend([e for e in state.in_edges(node) if e.data.data == name])
-        #     # # if isinstance(node, (dace.nodes.CodeNode, dace.nodes.EntryNode)) or (
-        #     # #     isinstance(node, dace.nodes.AccessNode)
-        #     # #     and node.access == dace.dtypes.AccessType.ReadOnly
-        #     # # ):
-        #     # #     edges.extend([e for e in state.in_edges(node) if e.data.data == name])
-        # edges = set(edges)
-        for edge in (e for e in state.edges() if e.data.data == name):
-            edge.data.data = f"_loc_buf_{name}"
-            if (
-                isinstance(edge.src, dace.nodes.AccessNode)
-                and edge.src.access == dace.AccessType.ReadOnly
-            ):
-                edge.src.data = f"_loc_buf_{name}"
-            if (
-                isinstance(edge.dst, dace.nodes.AccessNode)
-                and edge.dst.access == dace.AccessType.WriteOnly
-            ):
-                edge.dst.data = f"_loc_buf_{name}"
-            ranges = list(edge.data.subset.ranges[var_idx])
-            ranges[0] += offset - min_idx
-            ranges[1] += offset - min_idx
-            edge.data.subset.ranges[var_idx] = tuple(ranges)
-
-    def add_prefetch(
-        self, state, name, itervar, itervar_value, var_idx, subset_info, stride, offset
-    ):
-        if not subset_info["in_subsets"]:
-            return
-        if subset_info["write_idx"]:
-            in_indices = [subset.ranges[var_idx][0] for subset in subset_info["in_subsets"]]
-            if (stride > 0 and max(in_indices) < subset_info["write_idx"]) or (
-                stride < 0 and min(in_indices) > subset_info["write_idx"]
-            ):
-                return
-        import dace
-
-        itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
-        itervar_value = dace.symbolic.pystr_to_symbolic(itervar_value)
-
-        write_acc = state.add_write(f"_loc_buf_{name}")
-        read_acc = state.add_read(name)
-        #
-        # newest_subset = next(iter(subset_info["in_subsets"]))
-        # for subset in subset_info["in_subsets"]:
-        #     if (stride > 0 and subset.ranges[var_idx][0] > newest_subset.ranges[var_idx][0]) or (
-        #         stride < 0 and subset.ranges[var_idx][0] < newest_subset.ranges[var_idx][0]
-        #     ):
-        #         newest_subset = subset
-
-        # import dace.subsets
-        #
-        # for subset in subset_info["in_subsets"]:
-        #     if subset.ranges[var_idx][0] == newest_subset.ranges[var_idx][0]:
-        #         newest_subset = dace.subsets.union(newest_subset, subset)
-        if stride > 0:
-            load_idx = subset_info["max_idx"] - subset_info["min_idx"] + 2 + offset
-        else:
-            load_idx = offset
-        ranges = list(subset_info["unified_subset"].ranges[var_idx])
-        ranges[0] = load_idx
-        ranges[1] = load_idx
-        subset = copy.deepcopy(subset_info["unified_subset"])
-        subset.ranges[var_idx] = tuple(ranges)
-
-        ranges = list(subset_info["unified_subset"].ranges[var_idx])
-        ranges[0] = subset_info["max_idx"]
-        ranges[1] = subset_info["max_idx"]
-        newest_subset = copy.deepcopy(subset_info["unified_subset"])
-        newest_subset.ranges[var_idx] = tuple(ranges)
-
-        outer_subset = self.specialize_subset(
-            newest_subset, var_idx, itervar_sym, itervar_value + stride
         )
-        # if stride > 0:
-        #     load_idx = subset_info["max_idx"] - subset_info["min_idx"] + 2 + offset
-        # else:
-        #     load_idx = offset
+        if len(loop_states) != 1:
+            return False
 
-        # local_subset = copy.deepcopy(newest_subset)
-        # local_ranges = list(local_subset.ranges[var_idx])
-        # local_ranges[0] = load_idx
-        # local_ranges[1] = load_idx
-        # local_subset.ranges[var_idx] = tuple(local_ranges)
-        # # local_subset = self.specialize_subset(local_subset, var_idx, itervar_sym, itervar_value)
+        itervar, _, (_, loop_state) = find_for_loop(sdfg, guard, begin)
+        var_idx = "ijk".index(str(itervar))
+        for name in graph.arrays.keys():
+            subset_info = LoopBufferCache.collect_subset_info(loop_state, name, var_idx=var_idx)
+            if subset_info["length"] > 1:
+                return True
 
-        state.add_edge(
-            read_acc,
-            None,
-            write_acc,
-            None,
-            dace.Memlet.simple(name, subset_str=str(outer_subset), other_subset_str=str(subset)),
-        )
-
-    def add_store(self, state, name, itervar, itervar_value, var_idx, subset_info, stride, offset):
-        if not subset_info["out_subsets"]:
-            return
-        import dace
-
-        itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
-        itervar_value = dace.symbolic.pystr_to_symbolic(itervar_value)
-
-        write_acc = state.add_write(name)
-        read_acc = state.add_read(f"_loc_buf_{name}")
-
-        assert len(subset_info["out_subsets"]) == 1
-        subset = copy.deepcopy(next(iter(subset_info["out_subsets"])))
-        outer_subset = self.specialize_subset(subset, var_idx, itervar_sym, itervar_value - stride)
-
-        load_idx = subset_info["write_idx"] - subset_info["min_idx"] - stride + 1 + offset
-
-        # else:
-        #     load_idx = offset
-        # store_idx = (subset_info["max_idx"] if stride > 0 else subset_info["min_idx"]) + offset
-
-        local_subset = copy.deepcopy(subset)
-        local_ranges = list(local_subset.ranges[var_idx])
-        local_ranges[0] = load_idx
-        local_ranges[1] = load_idx
-        local_subset.ranges[var_idx] = tuple(local_ranges)
-        # local_subset = self.specialize_subset(local_subset, var_idx, itervar_sym, 0)
-
-        state.add_edge(
-            read_acc,
-            None,
-            write_acc,
-            None,
-            dace.Memlet.simple(
-                f"_loc_buf_{name}",
-                subset_str=str(local_subset),
-                other_subset_str=str(outer_subset),
-            ),
-        )
+        return False
 
     def apply(self, sdfg):
         ####################################################################
         # Obtain loop information
-        guard: dace.SDFGState = sdfg.node(self.subgraph[DetectLoop._loop_guard])
-        begin: dace.SDFGState = sdfg.node(self.subgraph[DetectLoop._loop_begin])
-        after_state: dace.SDFGState = sdfg.node(self.subgraph[DetectLoop._exit_state])
+        guard: dace.SDFGState = sdfg.node(self.subgraph[self._loop_guard])
+        begin: dace.SDFGState = sdfg.node(self.subgraph[self._loop_begin])
+        after_state: dace.SDFGState = sdfg.node(self.subgraph[self._exit_state])
 
         # Obtain iteration variable, range, and stride
         guard_inedges = sdfg.in_edges(guard)
         condition_edge = sdfg.edges_between(guard, begin)[0]
-        not_condition_edge = sdfg.edges_between(guard, after_state)[0]
 
-        itervar = next(iter(sdfg.in_edges(guard)[0].data.assignments))
+        sdfg.validate()
+        assert sdfg.parent is None or sdfg.parent_nsdfg_node in sdfg.parent.nodes()
+
+        if sdfg.parent is not None:
+            loads = {e.data.data for e in sdfg.parent.in_edges(sdfg.parent_nsdfg_node)}
+            stores = {e.data.data for e in sdfg.parent.out_edges(sdfg.parent_nsdfg_node)}
+        else:
+            loads = stores = set()
+
+        itervar, rng, ([*_, before_state], loop_state) = find_for_loop(sdfg, guard, begin)
         itervar_sym = dace.symbolic.pystr_to_symbolic(itervar)
         condition = condition_edge.data.condition_sympy()
-        rng = self._loop_range(itervar, guard_inedges, condition)
-        # Find the state prior to the loop
-        if rng[0] == symbolic.pystr_to_symbolic(guard_inedges[0].data.assignments[itervar]):
-            init_edge: dace.InterstateEdge = guard_inedges[0]
-            before_state: dace.SDFGState = guard_inedges[0].src
-            last_state: dace.SDFGState = guard_inedges[1].src
-        else:
-            init_edge: dace.InterstateEdge = guard_inedges[1]
-            before_state: dace.SDFGState = guard_inedges[1].src
-            last_state: dace.SDFGState = guard_inedges[0].src
 
-        # Get loop states
-        loop_states = list(
-            dace.sdfg.utils.dfs_conditional(
-                sdfg, sources=[begin], condition=lambda _, child: child != guard
-            )
-        )
-        assert len(loop_states) == 1
-        loop_state = loop_states[0]
+        var_idx = "ijk".index(str(itervar))
 
-        var_idx = ["i", "j", "k"].index(str(itervar))
+        subset_infos = {}
+        for name in sdfg.arrays.keys():
+            subset_infos[name] = self.collect_subset_info(loop_state, name, var_idx=var_idx)
 
-        try:
-            niter = int(abs(rng[1] - rng[0]) / abs(rng[2])) + 1
-        except TypeError:
-            # if the range is non-constant, assume it is large enough to fully peel the loop
-            niter = 3
+        fill_state = sdfg.add_state(sdfg.label + "_fill_state")
+        edge = sdfg.edges_between(before_state, guard)[0]
+        sdfg.add_edge(before_state, fill_state, dace.InterstateEdge(condition=edge.data.condition,
+                                                                    assignments=edge.data.assignments))
+        sdfg.add_edge(fill_state, guard, dace.InterstateEdge())
+        sdfg.remove_edge(edge)
 
-        if niter == 1:
-            # just inline the only present state, no prefetching needed
-            apply_count = sdfg.apply_transformations(
-                AlwaysApplyLoopPeeling, options={"count": 1, "begin": True}
-            )
-            assert apply_count == 1
+        load_state = sdfg.add_state(sdfg.label + "_load_state")
+        edge = sdfg.edges_between(guard, loop_state)[0]
+        sdfg.add_edge(guard, load_state, dace.InterstateEdge(condition=edge.data.condition,
+                                                             assignments=edge.data.assignments))
+        sdfg.add_edge(load_state, loop_state, dace.InterstateEdge())
+        sdfg.remove_edge(edge)
 
-        elif niter >= 2:
+        store_shift_state = sdfg.add_state(sdfg.label + "_store_shift_state")
+        edge = sdfg.edges_between(loop_state, guard)[0]
+        sdfg.add_edge(loop_state, store_shift_state, dace.InterstateEdge())
+        sdfg.add_edge(store_shift_state, guard, dace.InterstateEdge(condition=edge.data.condition,
+                                                                    assignments=edge.data.assignments))
+        sdfg.remove_edge(edge)
 
-            if self.arrays is not None:
-                arrays = {name: sdfg.arrays[name] for name in self.arrays}
-            else:
-                arrays = {
-                    name: array
-                    for name, array in sdfg.arrays.items()
-                    if not name.startswith("__tmp")
-                }
+        for name, array in list(sdfg.arrays.items()):
+            subset_info = subset_infos[name]
+            if subset_info["length"] <= 1:
+                continue
 
-            subset_infos = {}
-            for name in arrays.keys():
-                subset_infos[name] = self.collect_subset_info(loop_state, name, var_idx=var_idx)
-            ## peel both ends, add prefetching
-            # peel first iteration
-            apply_count = sdfg.apply_transformations(
-                AlwaysApplyLoopPeeling, options={"count": 1, "begin": True}, validate=False
-            )
-            assert apply_count == 1
-            assert guard in sdfg.nodes()
-            peeled_first = next(
-                edge.src for edge in sdfg.in_edges(guard) if edge.src is not loop_state
+            shape = list(array.shape)
+            shape[var_idx] = subset_info["length"]
+            sdfg.add_array(
+                f"_loc_buf_{name}",
+                shape=shape,
+                dtype=array.dtype,
+                storage=self.storage_type,
+                transient=True,
+                lifetime=dace.dtypes.AllocationLifetime.SDFG,
             )
 
-            # peel last iteration
-            apply_count = sdfg.apply_transformations(
-                AlwaysApplyLoopPeeling, options={"count": 1, "begin": False}, validate=False
-            )
-            assert apply_count == 1
-            assert guard in sdfg.nodes()
-            peeled_last = next(
-                edge.dst for edge in sdfg.out_edges(guard) if edge.dst is not loop_state
-            )
+            def relative(subset):
+                result = copy.deepcopy(subset)
+                offset = [0] * result.dims()
+                offset[var_idx] = subset_info["unified_subset"][var_idx][0]
+                result.offset(offset, negative=True)
+                return result
 
-            prefetch_state = sdfg.add_state(sdfg.label + "_prefetch_state")
-            sdfg.add_edge(prefetch_state, peeled_first, dace.InterstateEdge())
-            sdfg.add_edge(before_state, prefetch_state, dace.InterstateEdge())
-            sdfg.remove_edge(sdfg.edges_between(before_state, peeled_first)[0])
-            store_state = sdfg.add_state(sdfg.label + "_store_state")
-            sdfg.add_edge(peeled_last, store_state, dace.InterstateEdge())
-            sdfg.add_edge(store_state, after_state, dace.InterstateEdge())
-            sdfg.remove_edge(sdfg.edges_between(peeled_last, after_state)[0])
+            if name in loads:
+                read = fill_state.add_read(name)
+                write = fill_state.add_write(f"_loc_buf_{name}")
+                src_subset = copy.deepcopy(subset_info["unified_subset"])
+                dst_subset = relative(src_subset)
+                fill_state.add_edge(read, None, write, None,
+                        dace.Memlet(data=name, subset=src_subset,
+                                    other_subset=dst_subset))
 
-            shift_state = sdfg.add_state_before(loop_state, sdfg.label + "_shift_state")
-            # self.rename_arrays(sdfg)
-            # add prefetching to peeled_first and loop_state, add prefetch-only state
-            for name, array in arrays.items():
-                subset_info = subset_infos[name]
-                shape = list(array.shape)
-                shape[var_idx] = subset_info["length"]
-                sdfg.add_array(
-                    name=f"_loc_buf_{name}",
-                    shape=shape,
-                    dtype=array.dtype,
-                    storage=self.storage_type,
-                    transient=True,
-                    lifetime=dace.dtypes.AllocationLifetime.SDFG,
-                )
+                read = load_state.add_read(name)
+                write = load_state.add_write(f"_loc_buf_{name}")
+                select_load = min if rng[2] < 0 else max
+                src_subset = copy.deepcopy(select_load(subset_info["in_subsets"], key=lambda s: s[var_idx]))
+                dst_subset = relative(src_subset)
+                load_state.add_edge(read, None, write, None,
+                        dace.Memlet(data=name, subset=src_subset,
+                                    other_subset=dst_subset))
 
-                self.add_prefetch_all(
-                    prefetch_state, name, itervar, rng[0], var_idx, subset_info, rng[2], 1
-                )
+            read = store_shift_state.add_read(f"_loc_buf_{name}")
+            sdfg.add_datadesc(f"_tmp_loc_buf_{name}", sdfg.arrays[f"_loc_buf_{name}"])
+            write = store_shift_state.add_access(f"_tmp_loc_buf_{name}")
+            src_subset = relative(subset_info["unified_subset"])
+            dst_subset = src_subset
+            store_shift_state.add_edge(read, None, write, None,
+                    dace.Memlet(data=f"_loc_buf_{name}", subset=src_subset,
+                                other_subset=dst_subset))
 
-                if name in self.store:
-                    self.add_store_all(
-                        store_state, name, itervar, rng[1], var_idx, subset_info, rng[2], rng[2]
-                    )
-                self.localize_tasklet_memlets(
-                    peeled_first, name, itervar, 0, var_idx, subset_info, rng[2], 1
-                )
-                self.localize_tasklet_memlets(
-                    loop_state, name, itervar, itervar, var_idx, subset_info, rng[2], 1
-                )
-                self.localize_tasklet_memlets(
-                    peeled_last, name, itervar, rng[1], var_idx, subset_info, rng[2], 1 + rng[2]
-                )
-                self.add_prefetch(
-                    loop_state, name, itervar, itervar, var_idx, subset_info, rng[2], 0
-                )
-                self.add_prefetch(
-                    peeled_first, name, itervar, rng[0], var_idx, subset_info, rng[2], 0
-                )
-                self.add_shift_local(
-                    shift_state, name, itervar, rng[0], var_idx, subset_info, rng[2], 0
-                )
-                if name in self.store:
-                    self.add_store(
-                        loop_state, name, itervar, itervar, var_idx, subset_info, rng[2], 0
-                    )
-                    self.add_store(
-                        peeled_last, name, itervar, rng[1], var_idx, subset_info, rng[2], rng[2]
-                    )
+            read = write
+            write = store_shift_state.add_write(f"_loc_buf_{name}")
+            src_subset = copy.deepcopy(subset_info["unified_subset"])
+            src_subset.ranges[var_idx] = 1, subset_info["length"] - 1, 1
+            dst_subset = copy.deepcopy(src_subset)
+            dst_subset.ranges[var_idx] = 0, subset_info["length"] - 2, 1
+            if rng[2] < 0:
+                src_subset, dst_subset = dst_subset, src_subset
+            store_shift_state.add_edge(read, None, write, None,
+                    dace.Memlet(data=f"_tmp_loc_buf_{name}",
+                                subset=src_subset, other_subset=dst_subset))
 
-        if niter < 3:
-            # remove loop after peeling if the loop is never actually executed.
-            before_state = [e.src for e in sdfg.in_edges(guard) if e.src is not loop_state][0]
-            after_state = [e.dst for e in sdfg.out_edges(guard) if e.dst is not loop_state][0]
-
-            init_edges = sdfg.edges_between(before_state, guard)
-            assert len(init_edges) == 1
-            init_edge = init_edges[0]
-            sdfg.remove_edge(init_edge)
-            # add edge from pred directly to loop states
-
-            # sdfg.add_edge(before_state, first_state, dace.InterstateEdge(assignments=init_edge.assignments))
-            exit_edge = sdfg.edges_between(last_state, guard)[0]
-            sdfg.remove_edge(exit_edge)
-            sdfg.remove_node(loop_state)
-            sdfg.remove_node(guard)
-
-            sdfg.add_edge(
-                before_state,
-                after_state,
-                dace.InterstateEdge(
-                    condition=exit_edge.data.condition, assignments=init_edge.data.assignments
-                ),
-            )
+            if name in stores:
+                write = store_shift_state.add_write(name)
+                assert len(subset_info["out_subsets"]) == 1
+                dst_subset = copy.deepcopy(next(iter(subset_info["out_subsets"])))
+                src_subset = relative(dst_subset)
+                store_shift_state.add_edge(read, None, write, None,
+                        dace.Memlet(data=f"_tmp_loc_buf_{name}", subset=src_subset,
+                                    other_subset=dst_subset))
 
 
-import copy
-from collections import defaultdict
+            for edge in loop_state.edges():
+                if edge.data.data == name:
+                    assert edge.data.other_subset is None
+                    edge.data.data = f"_loc_buf_{name}"
+                    edge.data.subset = relative(edge.data.subset)
 
-import dace
-from dace import registry, symbolic
-from dace.properties import Property, make_properties
-from dace.sdfg import nodes
-from dace.sdfg import utils as sdutils
-from dace.transformation.interstate.loop_detection import DetectLoop
-from dace.transformation.interstate.loop_unroll import LoopUnroll
-from dace.transformation.transformation import Transformation
+            for node in loop_state.nodes():
+                if isinstance(node, nodes.AccessNode) and node.data == name:
+                    node.data = f"_loc_buf_{name}"
 
-
-@registry.autoregister
-@make_properties
-class BasicRegisterCache(Transformation):
-    _before_state = dace.SDFGState()
-    _loop_state = dace.SDFGState()
-    _guard_state = dace.SDFGState()
-
-    array = Property(dtype=str, desc="Name of the array to replace by a register cache")
-
-    @staticmethod
-    def expressions():
-        sdfg = dace.SDFG("_")
-        before_state, loop_state, guard_state = (
-            BasicRegisterCache._before_state,
-            BasicRegisterCache._loop_state,
-            BasicRegisterCache._guard_state,
-        )
-        sdfg.add_nodes_from((before_state, loop_state, guard_state))
-        sdfg.add_edge(before_state, guard_state, dace.InterstateEdge())
-        sdfg.add_edge(guard_state, loop_state, dace.InterstateEdge())
-        sdfg.add_edge(loop_state, guard_state, dace.InterstateEdge())
-        return [sdfg]
-
-    @staticmethod
-    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
-        return True
-
-    def _buffer_memlets(self, states):
-        for state in states:
-            for edge in state.edges():
-                src, dst = edge.src, edge.dst
-                if (
-                    isinstance(src, nodes.AccessNode)
-                    and src.data == self.array
-                    or isinstance(dst, nodes.AccessNode)
-                    and dst.data == self.array
-                ):
-                    yield edge.data
-
-    def _get_loop_axis(self, loop_state, loop_var):
-        def contains_loop_var(subset_range):
-            return any(loop_var in {s.name for s in r.free_symbols} for r in subset_range)
-
-        for memlet in self._buffer_memlets([loop_state]):
-            return [contains_loop_var(r) for r in memlet.subset.ranges].index(True)
-
-    def _get_buffer_size(self, state, loop_var, loop_axis):
-        min_offset, max_offset = 1000, -1000
-        for memlet in self._buffer_memlets([state]):
-            rb, re, _ = memlet.subset.ranges[loop_axis]
-            rb_offset = rb - symbolic.symbol(loop_var)
-            re_offset = re - symbolic.symbol(loop_var)
-            min_offset = min(min_offset, rb_offset, re_offset)
-            max_offset = max(max_offset, rb_offset, re_offset)
-        return max_offset - min_offset + 1
-
-    def _replace_indices(self, states, loop_var, loop_axis, buffer_size):
-        for memlet in self._buffer_memlets(states):
-            rb, re, rs = memlet.subset.ranges[loop_axis]
-            memlet.subset.ranges[loop_axis] = (rb % buffer_size, re % buffer_size, rs)
-
-    def apply(self, sdfg: dace.SDFG):
-        before_state = sdfg.node(self.subgraph[self._before_state])
-        loop_state = sdfg.node(self.subgraph[self._loop_state])
-        guard_state = sdfg.node(self.subgraph[self._guard_state])
-        loop_var = next(iter(sdfg.in_edges(guard_state)[0].data.assignments))
-
-        loop_axis = self._get_loop_axis(loop_state, loop_var)
-
-        buffer_size = self._get_buffer_size(loop_state, loop_var, loop_axis)
-        self._replace_indices(sdfg.states(), loop_var, loop_axis, buffer_size)
-
-        array = sdfg.arrays[self.array]
-        # TODO: generalize
-        if array.shape[loop_axis] == array.total_size:
-            array.shape = tuple(
-                buffer_size if i == loop_axis else s for i, s in enumerate(array.shape)
-            )
-            array.total_size = buffer_size
+        return sdfg
 
 
 @registry.autoregister_params(singlestate=True)
@@ -1652,7 +1108,7 @@ class OnTheFlyMapFusion(Transformation):
     @staticmethod
     def expressions():
         return [
-            sdutils.node_path_graph(
+            sdutil.node_path_graph(
                 OnTheFlyMapFusion._first_map_entry,
                 OnTheFlyMapFusion._first_tasklet,
                 OnTheFlyMapFusion._first_map_exit,
@@ -1811,3 +1267,127 @@ class OnTheFlyMapFusion(Transformation):
         state.remove_nodes_from(
             state.all_nodes_between(first_map_entry, first_map_exit) | {first_map_exit}
         )
+
+@registry.autoregister_params(singlestate=True)
+class IJMapFusion(Transformation):
+    map_entry = PatternNode(nodes.EntryNode)
+
+    @staticmethod
+    def annotates_memlets():
+        return False
+
+    @staticmethod
+    def expressions():
+        return [
+            sdutil.node_path_graph(
+                IJMapFusion.map_entry
+            )
+        ]
+
+    @staticmethod
+    def can_be_applied(graph, candidate, expr_index, sdfg, strict=False):
+        map_entries = [n for n in graph.nodes() if isinstance(n, nodes.MapEntry)]
+        if len(map_entries) <= 1:
+            return False
+
+        if any(set(m.map.params) != {"i", "j"} for m in map_entries):
+            return False
+
+        return True
+
+    def apply(self, sdfg):
+        graph = sdfg.nodes()[self.state_id]
+
+        map_entries = [n for n in graph.nodes() if isinstance(n, nodes.MapEntry)]
+        map_exits = [n for n in graph.nodes() if isinstance(n, nodes.MapExit)]
+        if len(map_entries) <= 1:
+            return sdfg
+
+        if any(set(m.map.params) != {"i", "j"} for m in map_entries):
+            return sdfg
+
+        i, j = dace.symbol("i"), dace.symbol("j")
+        column_subset = [(i, i, 1), (j, j, 1)]
+        for map_entry in map_entries:
+            for out_edge in graph.out_edges(map_entry):
+                if out_edge.data.subset[:2] != column_subset:
+                    return sdfg
+        for map_exit in map_exits:
+            for in_edge in graph.in_edges(map_exit):
+                if in_edge.data.subset[:2] != column_subset:
+                    return sdfg
+
+        new_entry = nodes.MapEntry(map=copy.deepcopy(map_entries[0].map))
+        new_exit = nodes.MapExit(map=copy.deepcopy(map_entries[0].map))
+
+        nsdfg = dace.SDFG('ij_fused')
+        nsdfg.symbols = sdfg.symbols
+
+        sources = {n.data for n in graph.source_nodes() if isinstance(n, nodes.AccessNode)}
+        sinks = {n.data for n in graph.sink_nodes() if isinstance(n, nodes.AccessNode)}
+        for name, array in sdfg.arrays.items():
+            if name in sources or name in sinks:
+                assert array.shape[:2] == (dace.symbol("I"), dace.symbol("J"))
+                nshape = list(array.shape)
+                nshape[:2] = [1, 1]
+                narray = copy.deepcopy(array)
+                narray.shape = tuple(nshape)
+                narray.transient = False
+                nsdfg.arrays[name] = narray
+
+        ngraph = copy.deepcopy(graph)
+        ngraph.instrument = dace.InstrumentationType.No_Instrumentation
+        ngraph.parent = nsdfg
+        nsdfg.add_node(ngraph)
+
+        remove = set()
+        for node in ngraph.nodes():
+            if isinstance(node, nodes.MapEntry):
+                remove.add(node)
+                in_edges = {e.data.data: e for e in ngraph.in_edges(node)}
+                out_edges =  {e.data.data: e for e in ngraph.out_edges(node)}
+                for (inp, in_edge), (out, out_edge) in zip(sorted(in_edges.items()), sorted(out_edges.items())):
+                    assert inp == out
+                    ngraph.add_edge(in_edge.src, in_edge.src_conn, out_edge.dst, out_edge.dst_conn, out_edge.data)
+            elif isinstance(node, nodes.MapExit):
+                remove.add(node)
+                in_edges = {e.data.data: e for e in ngraph.in_edges(node)}
+                out_edges =  {e.data.data: e for e in ngraph.out_edges(node)}
+                for (inp, in_edge), (out, out_edge) in zip(sorted(in_edges.items()), sorted(out_edges.items())):
+                    assert inp == out
+                    ngraph.add_edge(in_edge.src, in_edge.src_conn, out_edge.dst, out_edge.dst_conn, in_edge.data)
+        ngraph.remove_nodes_from(remove)
+
+        for edge in ngraph.edges():
+            assert edge.data.subset.ranges[:2] == column_subset
+            edge.data.subset.ranges[:2] = [(0, 0, 1), (0, 0, 1)]
+        nsdfg_node = graph.add_nested_sdfg(nsdfg, sdfg, sources, sinks)
+
+        def fix_sdfg_list_recursive(sdfg):
+            sdfg._sdfg_list = list(sdfg.all_sdfgs_recursive())
+            for state in sdfg.nodes():
+                for node in state.nodes():
+                    if isinstance(node, nodes.NestedSDFG):
+                        fix_sdfg_list_recursive(node.sdfg)
+            sdfg.update_sdfg_list([])
+        fix_sdfg_list_recursive(sdfg)
+        nsdfg.validate()
+
+        graph.remove_nodes_from(n for n in graph.nodes() if n is not nsdfg_node)
+
+        graph.add_node(new_entry)
+        graph.add_node(new_exit)
+
+        for inp in nsdfg_node.in_connectors:
+            access = nodes.AccessNode(inp, dace.AccessType.ReadOnly)
+            graph.add_memlet_path(access, new_entry, nsdfg_node,
+                                  memlet=dace.Memlet(data=inp, subset="i,j,0:K"),
+                                  dst_conn=inp)
+        for out in nsdfg_node.out_connectors:
+            access = nodes.AccessNode(out, dace.AccessType.WriteOnly)
+            graph.add_memlet_path(nsdfg_node, new_exit, access,
+                                  memlet=dace.Memlet(data=out, subset="i,j,0:K"),
+                                  src_conn=out)
+        sdfg.validate()
+
+        return sdfg
