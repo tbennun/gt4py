@@ -1296,7 +1296,8 @@ class OnTheFlyMapFusion(Transformation):
         )
 
         state.remove_nodes_from(
-            state.all_nodes_between(first_map_entry, first_map_exit) | {first_map_exit}
+            state.all_nodes_between(first_map_entry, first_map_exit) | {
+                first_map_entry, first_map_exit }
         )
 
 
