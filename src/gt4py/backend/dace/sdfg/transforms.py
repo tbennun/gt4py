@@ -201,7 +201,27 @@ class PruneTransientOutputs(Transformation):
 
     @staticmethod
     def _overlap(subset_a: dace.memlet.subsets.Subset, subset_b: dace.memlet.subsets.Subset):
-        return True
+
+
+        subset_a = copy.deepcopy(subset_a)
+        subset_b = copy.deepcopy(subset_b)
+        ranges_a = list(subset_a.ranges[2])
+        ranges_b = list(subset_b.ranges[2])
+        if len(ranges_a[0].free_symbols) > 0:
+            ranges_a[0] = ranges_a[0].replace(next(iter(ranges_a[0].free_symbols)),10000000)
+        if len(ranges_a[1].free_symbols) > 0:
+            ranges_a[1] = ranges_a[1].replace(next(iter(ranges_a[1].free_symbols)),10000000)
+        if len(ranges_b[0].free_symbols) > 0:
+            ranges_b[0] = ranges_b[0].replace(next(iter(ranges_b[0].free_symbols)),10000000)
+        if len(ranges_b[1].free_symbols) > 0:
+            ranges_b[1] = ranges_b[1].replace(next(iter(ranges_b[1].free_symbols)),10000000)
+        subset_a.ranges[2] = ranges_a
+        subset_b.ranges[2] = ranges_b
+        res = dace.subsets.intersects(subset_a, subset_b)
+        res = res if res is not None else True
+        return res
+        # import dace.subsets
+        #
 
     @staticmethod
     def _check_reads(state: dace.SDFGState, candidate_subset, sorted_accesses):

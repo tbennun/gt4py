@@ -21,13 +21,10 @@ class X86DaceOptimizer(CPUDaceOptimizer):
     description = "GT x86 style transformations "
 
     def transform_library(self, sdfg):
-        from dace.transformation.interstate import StateFusion
-        from gt4py.backend.dace.sdfg.transforms import PruneTransientOutputs
-
-        sdfg.apply_transformations_repeated([PruneTransientOutputs, StateFusion], validate=False)
         return sdfg
 
     def transform_optimize(self, sdfg):
+
         # import dace
         #
         # from dace.transformation.dataflow import MapCollapse
