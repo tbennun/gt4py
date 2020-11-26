@@ -1367,22 +1367,27 @@ class IJMapFusion(Transformation):
                     return sdfg
 
         new_entry = nodes.MapEntry(map=copy.deepcopy(map_entries[0].map))
-        new_exit = nodes.MapExit(map=copy.deepcopy(map_entries[0].map))
+        new_exit = nodes.MapExit(map=map_entry.map)
 
         nsdfg = dace.SDFG("ij_fused")
-        nsdfg.symbols = sdfg.symbols
+        for name, val in sdfg.symbols.items():
+            nsdfg.add_symbol(name, val)
+        for name, val in sdfg.constants.items():
+            nsdfg.add_constant(name, val)
 
         sources = {n.data for n in graph.source_nodes() if isinstance(n, nodes.AccessNode)}
         sinks = {n.data for n in graph.sink_nodes() if isinstance(n, nodes.AccessNode)}
         for name, array in sdfg.arrays.items():
-            if name in sources or name in sinks:
-                assert array.shape[:2] == (dace.symbol("I"), dace.symbol("J"))
+            narray = copy.deepcopy(array)
+            if array.shape[:2] == (dace.symbol("I"), dace.symbol("J")):
                 nshape = list(array.shape)
                 nshape[:2] = [1, 1]
-                narray = copy.deepcopy(array)
                 narray.shape = tuple(nshape)
+            if name in sources or name in sinks:
                 narray.transient = False
-                nsdfg.arrays[name] = narray
+            else:
+                narray.storage = dace.StorageType.Register
+            nsdfg.add_datadesc(name, narray)
 
         ngraph = copy.deepcopy(graph)
         ngraph.instrument = dace.InstrumentationType.No_Instrumentation
@@ -1422,7 +1427,6 @@ class IJMapFusion(Transformation):
                         in_edge.data,
                     )
         ngraph.remove_nodes_from(remove)
-
         for edge in ngraph.edges():
             assert edge.data.subset.ranges[:2] == column_subset
             edge.data.subset.ranges[:2] = [(0, 0, 1), (0, 0, 1)]
