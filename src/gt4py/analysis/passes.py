@@ -427,9 +427,12 @@ class NormalizeBlocksPass(TransformPass):
             return self._split_blocks
 
         def visit_DomainBlockInfo(self, block: DomainBlockInfo, context: Dict[str, Any]) -> None:
-            context["iteration_order"] = block.iteration_order
-            for ij_block in block.ij_blocks:
-                self.visit_IJBlockInfo(ij_block, context)
+            if block.iteration_order==gt_ir.IterationOrder.PARALLEL:
+                context["iteration_order"] = block.iteration_order
+                for ij_block in block.ij_blocks:
+                    self.visit_IJBlockInfo(ij_block, context)
+            else:
+                self._split_blocks.append(block)
 
         def visit_IJBlockInfo(self, ij_block: IJBlockInfo, context: Dict[str, Any]) -> None:
             for interval_block in ij_block.interval_blocks:
