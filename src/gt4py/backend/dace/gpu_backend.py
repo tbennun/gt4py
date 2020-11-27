@@ -41,6 +41,7 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
             OnTheFlyMapFusion,
             LoopBufferCache,
             IJMapFusion,
+            RefineMappedAccess
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
@@ -67,17 +68,21 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
                 fusion = SubgraphFusion(subgraph)
                 fusion.transient_allocation = dace.dtypes.StorageType.Register
                 fusion.apply(sdfg)
-                for name, array in sdfg.arrays.items():
-                    if array.transient:
-                        if array.storage == dace.dtypes.StorageType.GPU_Global:
-                            array.lifetime = dace.dtypes.AllocationLifetime.Persistent
 
-                        for node in graph.nodes():
-                            if isinstance(node, dace.nodes.NestedSDFG):
-                                for inner_name, inner_array in node.sdfg.arrays.items():
-                                    if inner_name == name:
-                                        inner_array.storage = array.storage
-                                        inner_array.strides = array.strides
+        sdfg.apply_transformations_repeated(RefineMappedAccess)
+
+        for name, array in sdfg.arrays.items():
+            if array.transient:
+                if array.storage == dace.dtypes.StorageType.GPU_Global:
+                    array.lifetime = dace.dtypes.AllocationLifetime.Persistent
+                for graph in sdfg.nodes():
+                    for node in graph.nodes():
+                        if isinstance(node, dace.nodes.NestedSDFG):
+                            for inner_name, inner_array in node.sdfg.arrays.items():
+                                if inner_name == name:
+                                    inner_array.storage = array.storage
+                                    inner_array.strides = array.strides
+
 
         dace.sdfg.utils.consolidate_edges(sdfg)
 
