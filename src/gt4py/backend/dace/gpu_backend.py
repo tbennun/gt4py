@@ -29,7 +29,7 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         from dace.transformation.interstate import StateFusion
         from gt4py.backend.dace.sdfg.transforms import PruneTransientOutputs
 
-        sdfg.apply_transformations_repeated([PruneTransientOutputs, StateFusion], validate=False, strict=True)
+        # sdfg.apply_transformations_repeated([PruneTransientOutputs, StateFusion], validate=False, strict=True)
         return sdfg
 
     def transform_optimize(self, sdfg):
@@ -44,9 +44,10 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
-        sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
-        sdfg.apply_transformations_repeated([StateFusion, RefineNestedAccess], validate=False, strict=True)
+        # sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
+        sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
         sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
+        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
         # sdfg.apply_strict_transformations(validate=False)
 
         for name, array in sdfg.arrays.items():
