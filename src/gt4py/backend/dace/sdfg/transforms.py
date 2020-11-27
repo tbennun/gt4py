@@ -1,10 +1,14 @@
 import copy
 from collections import defaultdict
+from typing import Dict, Set
 
 import dace
 from dace import registry
+from dace import subsets
+from dace import symbolic
 from dace.properties import Property, make_properties
-from dace.sdfg import SDFG, nodes, utils as sdutil
+from dace import SDFG, SDFGState, nodes
+from dace.sdfg import utils as sdutil
 
 from dace.transformation.transformation import Transformation, PatternNode
 from dace.transformation.interstate.loop_detection import DetectLoop, find_for_loop
@@ -859,6 +863,7 @@ def outer_k_loop_to_inner_map(sdfg: dace.SDFG, state: dace.SDFGState):
     sdfg.remove_node(state)
 
 
+
 @registry.autoregister
 @make_properties
 class LoopBufferCache(DetectLoop):
@@ -1474,3 +1479,196 @@ class IJMapFusion(Transformation):
         sdfg.validate()
 
         return sdfg
+
+
+@registry.autoregister_params(singlestate=True)
+@make_properties
+class RefineMappedAccess(Transformation):
+    """ 
+    If a data descriptor is accessed only within the context of a single map
+    and the accesses are unique per map iteration, reduces the dimensionality
+    of the data descriptor and locates it internally to the map.
+    """
+
+    make_register = Property(
+        dtype=bool, default=True,
+        desc='Sets the storage type of reduced data to Register')
+
+    entry = PatternNode(nodes.MapEntry)
+
+
+    @staticmethod
+    def expressions():
+        return [dace.sdfg.utils.node_path_graph(RefineMappedAccess.entry)]
+
+    @staticmethod
+    def _candidates(state: SDFGState, me: nodes.MapEntry) -> Set[str]:
+        sdfg = state.parent
+        mx = state.exit_node(me)
+        # Get candidates from map inputs/outputs
+        candidates = set()
+        for e in state.in_edges(me):
+            if isinstance(e.src, nodes.AccessNode) and state.in_degree(e.src) == 0:
+                if all(ee.dst is me for ee in state.out_edges(e.src)):
+                    candidates.add(e.src)
+        for e in state.out_edges(mx):
+            if isinstance(e.dst, nodes.AccessNode) and state.out_degree(e.dst) == 0:
+                if all(ee.src is mx for ee in state.in_edges(e.dst)):
+                    candidates.add(e.dst)
+
+        candidates = set(c for c in candidates if sdfg.arrays[c.data].transient)
+
+        subgraph = state.scope_subgraph(me)
+
+        # Check that all other instances of the access nodes only appear inside
+        # the map
+        names = set(n.data for n in candidates)
+        for dnode in state.data_nodes():
+            if dnode in candidates: continue
+            if dnode.data not in names: continue
+            if dnode not in subgraph.nodes():
+                names.remove(dnode.data)
+                continue
+        # Check for uses in other states
+        for other_state in sdfg.nodes():
+            if other_state is state: continue
+            for dnode in other_state.data_nodes():
+                if dnode.data in names:
+                    names.remove(dnode.data)
+                    continue
+
+        # (memlets) Mapping between data and indices of certain map indices
+        accesses: Dict[str, Dict[str, int]] = {}
+
+        # Check internal memlets for accesses that can be refined (i.e.,
+        # include map parameters)
+        map_params = me.map.params
+        for e in subgraph.edges():
+            if e.data.data not in names: continue
+            syms: Dict[str, int] = {}
+            for i, (rb, re, rs) in enumerate(e.data.subset):
+                # If this is not a map parameter index, it can be anything
+                if (len(set(map(str, rb.free_symbols)) & set(map_params)) == 0 and
+                        len(set(map(str, re.free_symbols)) & set(map_params)) == 0):
+                    continue
+
+                r = str(rb)
+
+                # Map parameter index must be exact (i, j)
+                if r not in map_params:
+                    break
+                # Index cannot appear more than once
+                if r in syms:
+                    break
+                # Index cannot be a range
+                if re != rb or rs != 1:
+                    break
+                syms[r] = i
+
+                # Check that all memlets access the map indices the same way
+                if e.data.data in accesses:
+                    if accesses[e.data.data][r] != i:
+                        break
+            else:
+                # If not all map indices are involved, bad access
+                if len(syms) == len(map_params):
+                    # No break occurred - well-defined access
+                    accesses[e.data.data] = syms
+                    continue
+
+            # Some break occured - bad access
+            names.remove(e.data.data)
+
+        # Filter out removed names
+        candidates = set(cand for cand in candidates if cand.data in names)
+        return candidates, accesses
+
+    @staticmethod
+    def can_be_applied(graph: SDFGState,
+                       candidate: Dict[PatternNode, int],
+                       expr_index: int,
+                       sdfg: SDFG,
+                       strict: bool = False) -> bool:
+
+        me = graph.node(candidate[RefineMappedAccess.entry])
+        candidates, _ = RefineMappedAccess._candidates(graph, me)
+        if len(candidates) > 0:
+            return True
+
+        return False
+
+    def apply(self, sdfg: SDFG):
+        state = sdfg.node(self.state_id)
+        me = self.entry(sdfg)
+        mx = state.exit_node(me)
+
+        to_remove, accesses = RefineMappedAccess._candidates(state, me)
+
+        ######################################
+        # Modify graph structure
+        src_removals = [n for n in to_remove if any(e.src is n
+                        for e in state.in_edges(me))]
+        sink_removals = [n for n in to_remove if any(e.dst is n
+                         for e in state.out_edges(mx))]
+        # Source nodes
+        for node in src_removals:
+            # Remove outer edges
+            for e in list(state.out_edges(node)):
+                state.remove_edge_and_connectors(e)
+            # Reconnect node to map from the inside
+            state.add_nedge(me, node, dace.Memlet())
+            # Redirect inner edges
+            for e in list(state.out_edges(me)):
+                if e.data.data == node.data:
+                    state.remove_edge(e)
+                    me.remove_out_connector(e.src_conn)
+                    state.add_edge(node, None, e.dst, e.dst_conn, e.data)
+        # Sink nodes
+        for node in sink_removals:
+            # Remove outer edges
+            for e in list(state.in_edges(node)):
+                state.remove_edge_and_connectors(e)
+            # Reconnect node to map from the inside
+            state.add_nedge(node, mx, dace.Memlet())
+            # Redirect inner edges
+            for e in list(state.in_edges(mx)):
+                if e.data.data == node.data:
+                    state.remove_edge(e)
+                    mx.remove_in_connector(e.dst_conn)
+                    state.add_edge(e.src, e.src_conn, node, None, e.data)
+
+        ######################################
+        # Modify data descriptors
+        names = set(n.data for n in to_remove)
+        for data in names:
+            desc = sdfg.arrays[data]
+            # Reduce shape in the right indices
+            new_shape = list(desc.shape)
+            for ind in accesses[data].values():
+                new_shape[ind] = 1
+            desc.shape = new_shape
+            # Reset strides and total size
+            desc.strides = [
+                dace.data._prod(new_shape[i + 1:])
+                for i in range(len(new_shape))
+            ]
+            desc.total_size = dace.data._prod(desc.shape)
+            # Change storage type (if set)
+            if self.make_register:
+                desc.storage = dace.StorageType.Register
+
+        ######################################
+        # Modify edges
+        subgraph = state.scope_subgraph(me)
+        # Construct subsets to offset by
+        offsets = {}
+        for data in names:
+            rng = [(0, 0, 1)] * len(sdfg.arrays[data].shape)
+            for param, ind in accesses[data].items():
+                sym = symbolic.pystr_to_symbolic(param)
+                rng[ind] = (sym, sym, 1)
+            offsets[data] = subsets.Range(rng)
+
+        for e in subgraph.edges():
+            if e.data.data in offsets:
+                e.data.subset.offset(offsets[e.data.data], True)

@@ -41,20 +41,14 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
             OnTheFlyMapFusion,
             LoopBufferCache,
             IJMapFusion,
+            RefineMappedAccess,
             RemoveTrivialLoop
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
-        for nsdfg in sdfg.all_sdfgs_recursive():
-            nsdfg.apply_transformations_repeated(RemoveTrivialLoop, validate=False)
-            nsdfg.apply_transformations_repeated(EndStateElimination, validate=False)
-            nsdfg.apply_strict_transformations(validate=False)
         sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
 
         # sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
-        sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
-        sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
-        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
         # # sdfg.apply_strict_transformations(validate=False)
         #
         # for name, array in sdfg.arrays.items():
@@ -62,6 +56,7 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         #         array.lifetime = dace.dtypes.AllocationLifetime.Persistent
         #
         #
+        sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
 
         from dace.sdfg.graph import SubgraphView
         from dace.transformation.subgraph.subgraph_fusion import SubgraphFusion
@@ -74,17 +69,29 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
                 fusion = SubgraphFusion(subgraph)
                 fusion.transient_allocation = dace.dtypes.StorageType.Register
                 fusion.apply(sdfg)
-                for name, array in sdfg.arrays.items():
-                    if array.transient:
-                        if array.storage == dace.dtypes.StorageType.GPU_Global:
-                            array.lifetime = dace.dtypes.AllocationLifetime.Persistent
 
-                        for node in graph.nodes():
-                            if isinstance(node, dace.nodes.NestedSDFG):
-                                for inner_name, inner_array in node.sdfg.arrays.items():
-                                    if inner_name == name:
-                                        inner_array.storage = array.storage
-                                        inner_array.strides = array.strides
+        for nsdfg in sdfg.all_sdfgs_recursive():
+            nsdfg.apply_transformations_repeated(RemoveTrivialLoop, validate=False)
+            nsdfg.apply_transformations_repeated(EndStateElimination, validate=False)
+            nsdfg.apply_strict_transformations(validate=False)
+        sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
+        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
+        sdfg.apply_transformations_repeated(RefineMappedAccess)
+        #sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
+
+
+        for name, array in sdfg.arrays.items():
+            if array.transient:
+                if array.storage == dace.dtypes.StorageType.GPU_Global:
+                    array.lifetime = dace.dtypes.AllocationLifetime.Persistent
+                for graph in sdfg.nodes():
+                    for node in graph.nodes():
+                        if isinstance(node, dace.nodes.NestedSDFG):
+                            for inner_name, inner_array in node.sdfg.arrays.items():
+                                if inner_name == name:
+                                    inner_array.storage = array.storage
+                                    inner_array.strides = array.strides
+
 
         dace.sdfg.utils.consolidate_edges(sdfg)
 
