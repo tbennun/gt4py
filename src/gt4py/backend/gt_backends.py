@@ -516,6 +516,7 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
         "clean": {"versioning": False, "type": bool},
         "debug_mode": {"versioning": True, "type": bool},
         "verbose": {"versioning": False, "type": bool},
+        "enforce_dtype": {"versioning": True},
     }
 
     GT_BACKEND_T: str
