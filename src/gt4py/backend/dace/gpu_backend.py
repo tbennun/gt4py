@@ -46,16 +46,9 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
-        for nsdfg in sdfg.all_sdfgs_recursive():
-            nsdfg.apply_transformations_repeated(RemoveTrivialLoop, validate=False)
-            nsdfg.apply_transformations_repeated(EndStateElimination, validate=False)
-            nsdfg.apply_strict_transformations(validate=False)
         sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
 
         # sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
-        sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
-        sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
-        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
         # # sdfg.apply_strict_transformations(validate=False)
         #
         # for name, array in sdfg.arrays.items():
@@ -63,6 +56,7 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         #         array.lifetime = dace.dtypes.AllocationLifetime.Persistent
         #
         #
+        sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
 
         from dace.sdfg.graph import SubgraphView
         from dace.transformation.subgraph.subgraph_fusion import SubgraphFusion
@@ -76,7 +70,15 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
                 fusion.transient_allocation = dace.dtypes.StorageType.Register
                 fusion.apply(sdfg)
 
+        for nsdfg in sdfg.all_sdfgs_recursive():
+            nsdfg.apply_transformations_repeated(RemoveTrivialLoop, validate=False)
+            nsdfg.apply_transformations_repeated(EndStateElimination, validate=False)
+            nsdfg.apply_strict_transformations(validate=False)
+        sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
+        sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
         sdfg.apply_transformations_repeated(RefineMappedAccess)
+        #sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
+
 
         for name, array in sdfg.arrays.items():
             if array.transient:
