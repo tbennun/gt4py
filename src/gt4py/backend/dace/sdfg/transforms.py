@@ -658,9 +658,12 @@ class EnhancedDetectLoop(DetectLoop):
         # Obtain iteration variable, range, and stride
         guard_inedges = sdfg.in_edges(guard)
         condition_edge = sdfg.edges_between(guard, begin)[0]
-        itervar = list(guard_inedges[0].data.assignments.keys())[0]
+        # itervar = list(guard_inedges[0].data.assignments.keys())[0]
         condition = condition_edge.data.condition_sympy()
-        rng = LoopUnroll._loop_range(itervar, guard_inedges, condition)
+        # rng = LoopUnroll._loop_range(itervar, guard_inedges, condition)
+
+        itervar, rng, loop_states = find_for_loop(sdfg, guard, begin)
+        start, end, step = rng
 
         # Find the state prior to the loop
         if rng[0] == dace.symbolic.pystr_to_symbolic(guard_inedges[0].data.assignments[itervar]):
@@ -690,14 +693,16 @@ class RemoveTrivialLoop(EnhancedDetectLoop):
         # Obtain iteration variable, range, and stride
         guard_inedges = graph.in_edges(guard)
         condition_edge = graph.edges_between(guard, begin)[0]
-        itervar = list(guard_inedges[0].data.assignments.keys())[0]
+        # itervar = list(guard_inedges[0].data.assignments.keys())[0]
         condition = condition_edge.data.condition_sympy()
 
+        loop = find_for_loop(sdfg, guard, begin)
+
         # If loop cannot be detected, fail
-        rng = LoopUnroll._loop_range(itervar, guard_inedges, condition)
-        if not rng:
+        if loop is None:
             return False
 
+        itervar, rng, loop_states = loop
         start, end, step = rng
 
         try:
