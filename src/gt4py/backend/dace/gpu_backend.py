@@ -35,15 +35,22 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
     def transform_optimize(self, sdfg):
         # import dace
         from dace.transformation.dataflow import MapCollapse
-        from dace.transformation.interstate import StateFusion, RefineNestedAccess
+        from dace.transformation.interstate import StateFusion, RefineNestedAccess, EndStateElimination, InlineSDFG
 
         from gt4py.backend.dace.sdfg.transforms import (
             OnTheFlyMapFusion,
             LoopBufferCache,
             IJMapFusion,
+            RemoveTrivialLoop
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
+        for nsdfg in sdfg.all_sdfgs_recursive():
+            nsdfg.apply_transformations_repeated(RemoveTrivialLoop, validate=False)
+            nsdfg.apply_transformations_repeated(EndStateElimination, validate=False)
+            nsdfg.apply_strict_transformations(validate=False)
+        sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
+
         # sdfg.apply_transformations_repeated(IJMapFusion, validate=False)
         sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
         sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
