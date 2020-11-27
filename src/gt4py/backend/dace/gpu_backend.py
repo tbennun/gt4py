@@ -48,15 +48,13 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
         sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
         sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
-        # sdfg.apply_strict_transformations(validate=False)
-
-        for name, array in sdfg.arrays.items():
-            if array.transient:
-                array.lifetime = dace.dtypes.AllocationLifetime.Persistent
-
-
-
-        # sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
+        # # sdfg.apply_strict_transformations(validate=False)
+        #
+        # for name, array in sdfg.arrays.items():
+        #     if array.transient:
+        #         array.lifetime = dace.dtypes.AllocationLifetime.Persistent
+        #
+        #
 
         from dace.sdfg.graph import SubgraphView
         from dace.transformation.subgraph.subgraph_fusion import SubgraphFusion
