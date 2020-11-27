@@ -86,6 +86,10 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
                     and array.storage is dace.StorageType.Register):
                 array.lifetime = dace.AllocationLifetime.Scope
 
+        for sd in sdfg.all_sdfgs_recursive():
+            if sd is sdfg: continue
+            sd.specialize(sdfg.constants)
+
         return sdfg
 
 
