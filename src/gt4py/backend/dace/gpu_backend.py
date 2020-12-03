@@ -12,9 +12,6 @@ from .base_backend import (
 )
 
 
-dace.SDFG
-
-
 class GPUDacePyModuleGenerator(DacePyModuleGenerator):
     @property
     def array_interface_name(self):
@@ -35,14 +32,19 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
     def transform_optimize(self, sdfg):
         # import dace
         from dace.transformation.dataflow import MapCollapse
-        from dace.transformation.interstate import StateFusion, RefineNestedAccess, EndStateElimination, InlineSDFG
+        from dace.transformation.interstate import (
+            StateFusion,
+            RefineNestedAccess,
+            EndStateElimination,
+            InlineSDFG,
+        )
 
         from gt4py.backend.dace.sdfg.transforms import (
             OnTheFlyMapFusion,
             LoopBufferCache,
             IJMapFusion,
             RefineMappedAccess,
-            RemoveTrivialLoop
+            RemoveTrivialLoop,
         )
 
         sdfg.apply_transformations_repeated(MapCollapse, validate=False)
@@ -54,8 +56,7 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         # for name, array in sdfg.arrays.items():
         #     if array.transient:
         #         array.lifetime = dace.dtypes.AllocationLifetime.Persistent
-        #
-        #
+
         sdfg.apply_transformations_repeated(OnTheFlyMapFusion, validate=False)
 
         from dace.sdfg.graph import SubgraphView
@@ -77,8 +78,6 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
         sdfg.apply_transformations_repeated(RefineNestedAccess, validate=False, strict=True)
         sdfg.apply_transformations_repeated(LoopBufferCache, validate=False)
         sdfg.apply_transformations_repeated(RefineMappedAccess)
-        #sdfg.apply_transformations_repeated(InlineSDFG, validate=False)
-
 
         for name, array in sdfg.arrays.items():
             if array.transient:
@@ -92,16 +91,18 @@ class GPUDaceOptimizer(CudaDaceOptimizer):
                                     inner_array.storage = array.storage
                                     inner_array.strides = array.strides
 
-
         dace.sdfg.utils.consolidate_edges(sdfg)
 
         for sd, name, array in sdfg.arrays_recursive():
-            if (array.lifetime is dace.AllocationLifetime.Persistent
-                    and array.storage is dace.StorageType.Register):
+            if (
+                array.lifetime is dace.AllocationLifetime.Persistent
+                and array.storage is dace.StorageType.Register
+            ):
                 array.lifetime = dace.AllocationLifetime.Scope
 
         for sd in sdfg.all_sdfgs_recursive():
-            if sd is sdfg: continue
+            if sd is sdfg:
+                continue
             sd.specialize(sdfg.constants)
 
         return sdfg

@@ -449,46 +449,6 @@ class SDFGBuilder:
             self.sdfg.add_edge(self.tail_state, entry_state, dace.InterstateEdge())
             self.tail_state = exit_state
 
-        # def _make_mapped_computation(self, node: gt_ir.ApplyBlock, map_range):
-        #     state = self.sdfg.add_state()
-        #
-        #     tasklet = state.add_tasklet(
-        #         name=self.new_tasklet_name(),
-        #         inputs=node.mapped_input_memlets,
-        #         outputs=node.mapped_output_memlets,
-        #         code=node.tasklet_code,
-        #     )
-        #     map_entry, map_exit = state.add_map(name=self.new_map_name(), ndrange=map_range)
-        #
-        #     for memlet_info in node.mapped_input_memlet_infos.values():
-        #         name = memlet_info.outer_name
-        #         state.add_memlet_path(
-        #             state.add_read(name),
-        #             map_entry,
-        #             tasklet,
-        #             memlet=node.mapped_input_memlets[memlet_info.local_name],
-        #             dst_conn=memlet_info.local_name,
-        #         )
-        #     if len(node.mapped_input_memlet_infos) == 0:
-        #         state.add_edge(map_entry, None, tasklet, None, dace.Memlet())
-        #
-        #     out_field_accessors = dict()
-        #     for memlet_info in node.mapped_output_memlet_infos.values():
-        #         name = memlet_info.outer_name
-        #         if name not in out_field_accessors:
-        #             out_field_accessors[name] = state.add_write(name)
-        #         state.add_memlet_path(
-        #             tasklet,
-        #             map_exit,
-        #             out_field_accessors[name],
-        #             memlet=node.mapped_output_memlets[memlet_info.local_name],
-        #             src_conn=memlet_info.local_name,
-        #         )
-        #     if len(node.mapped_output_memlet_infos) == 0:
-        #         state.add_edge(tasklet, None, map_exit, None, dace.Memlet())
-        #
-        #     return state
-
         def visit_FieldRef(self, node: gt_ir.FieldRef):
             import copy
 
