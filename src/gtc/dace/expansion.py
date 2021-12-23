@@ -41,13 +41,21 @@ from gtc.oir import Interval
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
 
-def _get_offset_subset_str(origin, offset, dimensions, symbols="ij0"):
+def _get_offset_subset_str(
+    origin, offset, nonflat_dimensions, context_dimensions=None, symbols="ij0"
+):
+    if context_dimensions is None:
+        context_dimensions = nonflat_dimensions
     subset_strs = []
     for dim, var in enumerate(symbols):
-        if not dimensions[dim]:
+        if not context_dimensions[dim]:
             continue
-        off = origin[dim] + offset[dim]
-        subset_strs.append(f"{var}{off:+d}")
+        else:
+            if nonflat_dimensions[dim]:
+                subset_strs.append(f"({var})+({origin[dim]})+({offset[dim]})")
+            elif any(d for d in nonflat_dimensions):
+                subset_strs.append("0")
+
     return subset_strs
 
 
@@ -57,7 +65,7 @@ def _get_offset_suffix(node: Tuple[int, int, int]):
         res.append(f'i{"m" if node[0] < 0 else "p"}{abs(node[0]):d}')
     if node[1] != 0:
         res.append(f'j{"m" if node[1] < 0 else "p"}{abs(node[1]):d}')
-    if node[2] != 0:
+    if node[2] is not None and node[2] != 0:
         res.append(f'k{"m" if node[2] < 0 else "p"}{abs(node[2]):d}')
     return "_".join(res)
 
@@ -71,36 +79,70 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         node: oir.FieldAccess,
         *,
         origins,
-        dimensions,
+        context_dimensions,
+        nonflat_dimensions,
         is_target,
         targets,
         region_fields,
+        variable_k_fields,
         index_symbols,
         **kwargs,
     ):
-
+        idx_syms = list(index_symbols)
+        if node.name in variable_k_fields:
+            idx_syms[2] = "k"
+        offset_for_suffix = list(node.offset.to_tuple())
         if node.name in region_fields:
-            node.offset.to_tuple()
-            name = get_tasklet_symbol(node.name, (0, 0, node.offset.k), is_target)
-        elif (is_target or node.name in targets) and self.visit(node.offset) == "":
+            offset_for_suffix[0] = 0
+            offset_for_suffix[1] = 0
+        if node.name in variable_k_fields:
+            offset_for_suffix[2] = 0
+        elif is_target or node.name in targets:
             targets.add(node.name)
-            name = "__" + node.name
-        else:
-            name = node.name + "__" + self.visit(node.offset)
+        name = get_tasklet_symbol(
+            node.name, offset_for_suffix, (node.name in targets and self.visit(node.offset) == "")
+        )
 
-        if node.name not in region_fields and not node.data_index:
+        if (
+            node.name not in region_fields
+            and node.name not in variable_k_fields
+            and not node.data_index
+        ):
             offset_str = ""
         else:
             offset_strs = []
-            if node.name in region_fields:
-                acc_name = get_tasklet_symbol(node.name, (0, 0, node.offset.k), is_target)
+            if node.name in region_fields or node.name in variable_k_fields:
+                acc_name = get_tasklet_symbol(
+                    node.name,
+                    offset_for_suffix,
+                    is_target,
+                )
+                offset = list(node.offset.to_tuple())
+                if isinstance(node.offset, common.VariableKOffset):
+                    varoffset = self.visit(
+                        node.offset.k,
+                        targets=targets,
+                        is_target=False,
+                        region_fields=region_fields,
+                        variable_k_fields=variable_k_fields,
+                        index_symbols=index_symbols,
+                        context_dimensions=context_dimensions,
+                        nonflat_dimensions=nonflat_dimensions,
+                        origins=origins,
+                        **kwargs,
+                    )
+                    offset[2] = f"{varoffset}"
                 offset_strs += _get_offset_subset_str(
                     origins[node.name],
-                    node.offset.to_tuple(),
-                    dimensions[acc_name],
-                    symbols=index_symbols,
+                    offset,
+                    context_dimensions=context_dimensions[node.name],
+                    nonflat_dimensions=nonflat_dimensions[acc_name],
+                    symbols=idx_syms,
                 )
+
             if node.data_index:
+                if len(offset_strs) == 0:
+                    offset_strs = ["0"] * sum(context_dimensions[node.name])
                 offset_strs += list(self.visit(node.data_index))
             offset_str = ",".join(offset_strs)
             if offset_str:
@@ -108,6 +150,9 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         return name + offset_str
 
     def visit_CartesianOffset(self, node: common.CartesianOffset):
+        return _get_offset_suffix(node.to_tuple())
+
+    def visit_VariableKOffset(self, node: common.VariableKOffset):
         return _get_offset_suffix(node.to_tuple())
 
     def visit_AssignStmt(self, node: oir.AssignStmt, **kwargs):
@@ -232,31 +277,24 @@ class TaskletCodegen(codegen.TemplatedGenerator):
             clauses.append(f"{index_symbols[1]} < {jmax}")
         return " and ".join(clauses)
 
-    class RemoveCastInIndexVisitor(eve.NodeTranslator):
-        def visit_FieldAccess(self, node: oir.FieldAccess):
-            if node.data_index:
-                return self.generic_visit(node, in_idx=True)
-            else:
-                return self.generic_visit(node)
-
-        def visit_Cast(self, node: oir.Cast, in_idx=False):
-            if in_idx:
-                return node.expr
-            else:
-                return node
-
-        def visit_Literal(self, node: oir.Cast, in_idx=False):
-            if in_idx:
-                return node
-            else:
-                return oir.Cast(dtype=node.dtype, expr=node)
+    def visit_While(self, node: oir.While, **kwargs: Any):
+        body = self.visit(node.body, **kwargs)
+        body = [line for block in body for line in block.split("\n")]
+        cond = self.visit(node.cond, is_target=False, **kwargs)
+        init = "num_iter = 0"
+        max_iter = 1000
+        cond += f" and (num_iter < {max_iter})"
+        body.append("num_iter += 1")
+        indent = " " * 4
+        delim = f"\n{indent}"
+        code_as_str = f"{init}\nwhile {cond}:\n{indent}{delim.join(body)}"
+        return code_as_str
 
     @classmethod
     def apply(cls, node: oir.HorizontalExecution, **kwargs: Any) -> str:
-        preprocessed_node = cls.RemoveCastInIndexVisitor().visit(node)
         if not isinstance(node, oir.HorizontalExecution):
             raise ValueError("apply() requires oir.HorizontalExecution node")
-        generated_code = super().apply(preprocessed_node, **kwargs)
+        generated_code = super().apply(node, **kwargs)
         formatted_code = codegen.format_source("python", generated_code)
         return formatted_code
 
@@ -354,7 +392,7 @@ class OIRLibraryNodeExpander:
         for s in list(self.res_sdfg.free_symbols):
             # res_sdfg already contains symbols for domain and strides where type is always int.
             # The type of API parameters still needs to be set.
-            if s not in self.res_sdfg.symbols:
+            if str(s) not in self.res_sdfg.symbols:
                 self.res_sdfg.add_symbol(s, self.parent_sdfg.symbols.get(s, dace.int32))
         res.symbol_mapping = {s: s for s in self.res_sdfg.free_symbols}
         return res
@@ -407,9 +445,8 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
             access_collection = get_access_collection(section)
             for name, offsets in access_collection.offsets().items():
                 for off in offsets:
-
                     k_level = oir.AxisBound(
-                        level=interval.start.level, offset=interval.start.offset + off[2]
+                        level=interval.start.level, offset=interval.start.offset + (off[2] or 0)
                     )
                     k_orig = min(k_origs.get(name, k_level), k_level)
                     k_origs[name] = k_orig
@@ -426,6 +463,7 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
         out_subsets = dict()
         section_origins: Dict[str, Tuple[int, int]] = dict()
         min_k_offsets: Dict[str, int] = dict()
+        max_k_offsets: Dict[str, int] = dict()
         for he in (
             ln
             for ln, _ in section.all_nodes_recursive()
@@ -444,15 +482,18 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
                     )
                     if name not in section_origins:
                         section_origins[name] = origin
-                    if name not in min_k_offsets:
-                        min_k_offsets[name] = off[2]
                     section_origins[name] = (
                         max(section_origins[name][0], origin[0]),
                         max(section_origins[name][1], origin[1]),
                     )
-                    min_k_offsets[name] = min(min_k_offsets[name], off[2])
+
+                    min_k_offsets.setdefault(name, off[2] or 0)
+                    min_k_offsets[name] = min(min_k_offsets[name], off[2] or 0)
+
+                    max_k_offsets.setdefault(name, off[2] or 0)
+                    max_k_offsets[name] = max(max_k_offsets[name], off[2] or 0)
+
         access_collection = get_access_collection(section, compensate_regions=True)
-        # access_collection = get_access_collection(section, compensate_regions=False)
         for name, section_origin in section_origins.items():
             vl_origin = self.compensated_origins[name]
             shape = section.arrays[name].shape
@@ -473,13 +514,28 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
                     )
                 )
             if dimensions[2]:
-                subset_strs.append(
-                    "k-({k_orig}){k:+d}:k-({k_orig}){k:+d}{K:+d}".format(
-                        k_orig=get_axis_bound_str(vl_origin[2], "__K"),
-                        k=min_k_offsets[name],
-                        K=shape[next(idx)],
+                if any(
+                    acc.offset[2] is None
+                    for acc in access_collection.ordered_accesses()
+                    if acc.field == name
+                ):
+                    subset_strs.append(
+                        "({kstart})-({global_orig})+({min_off}):({kend})-({global_orig})+({max_off})".format(
+                            kstart=get_axis_bound_str(interval.start, "__K"),
+                            global_orig=get_axis_bound_str(vl_origin[2], "__K"),
+                            min_off=min_k_offsets[name] or 0,
+                            kend=get_axis_bound_str(interval.end, "__K"),
+                            max_off=max_k_offsets[name] or 0,
+                        )
                     )
-                )
+                else:
+                    subset_strs.append(
+                        "k-({k_orig})+({k}):k-({k_orig})+({k})+({K})".format(
+                            k_orig=get_axis_bound_str(vl_origin[2], "__K"),
+                            k=min_k_offsets[name] or 0,
+                            K=shape[next(idx)],
+                        )
+                    )
             data_dims = shape[sum(dimensions) :]
             subset_strs.extend([f"0:{d}" for d in data_dims])
             subset_str = ",".join(subset_strs)
@@ -537,6 +593,14 @@ class SequentialNaiveVerticalLoopExpander(NaiveVerticalLoopExpander):
                 inputs={k for k in in_accesses},
                 outputs={k for k in out_accesses},
             )
+            nsdfg.symbol_mapping["k"] = f"k-({get_axis_bound_str(interval.start, '__K')})"
+            nsdfg.symbol_mapping[
+                "__K"
+            ] = f"({get_axis_bound_str(interval.end, '__K')})-({get_axis_bound_str(interval.start, '__K')})"
+            if "k" not in section.symbols:
+                section.add_symbol("k", stype=dace.float32)
+            if "__K" not in section.symbols:
+                section.add_symbol("__K", stype=dace.float32)
             for name, acc in in_accesses.items():
                 loop_state.add_edge(
                     acc, None, nsdfg, name, dace.memlet.Memlet.simple(name, in_subsets[name])
@@ -583,6 +647,14 @@ class ParallelNaiveVerticalLoopExpander(NaiveVerticalLoopExpander):
                 inputs=section_inputs,
                 outputs=section_outputs,
             )
+            nsdfg.symbol_mapping["k"] = f"k-({get_axis_bound_str(interval.start, '__K')})"
+            nsdfg.symbol_mapping[
+                "__K"
+            ] = f"({get_axis_bound_str(interval.end, '__K')})-({get_axis_bound_str(interval.start, '__K')})"
+            if "k" not in section.symbols:
+                section.add_symbol("k", stype=dace.float32)
+            if "__K" not in section.symbols:
+                section.add_symbol("__K", stype=dace.float32)
             in_subsets, out_subsets = self.get_mapped_subsets_dicts(interval, section)
             if len(in_subsets) == 0:
                 self.res_state.add_edge(map_entry, None, nsdfg, None, memlet=dace.memlet.Memlet())
@@ -638,12 +710,13 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
                             )
                             offset.append(min(0, off))
                     else:
-                        # if acc.offset[dim] < 0:
                         offset.append(0)
-                        # offset.append(min(acc.offset[dim], 0))
                 offset.append(acc.offset[2])
             else:
-                offset = acc.offset
+                offset = [min(acc.offset[0], 0), min(acc.offset[1], 0), acc.offset[2]]
+
+            if offset[2] is None:
+                offset[2] = 0
 
             origins.setdefault(acc.field, offset)
             origins[acc.field] = (
@@ -668,21 +741,56 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
         region_accesses = {
             acc.field for acc in access_collection.ordered_accesses() if acc.region is not None
         }
+        variable_k_accesses = {
+            acc.name
+            for acc in self.node.oir_node.iter_tree().if_isinstance(oir.FieldAccess)
+            if isinstance(acc.offset, common.VariableKOffset)
+        }
         dynamic_accesses = {
             get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=False)
-            for maskstmt in self.node.oir_node.iter_tree().if_isinstance(oir.MaskStmt)
+            for maskstmt in self.node.oir_node.iter_tree().if_isinstance(oir.MaskStmt, oir.For)
             for stmt in maskstmt.body
             for assign in stmt.iter_tree().if_isinstance(oir.AssignStmt)
             for acc in assign.right.iter_tree().if_isinstance(oir.FieldAccess)
         }
         dynamic_accesses |= {
             get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=True)
-            for maskstmt in self.node.oir_node.iter_tree().if_isinstance(oir.MaskStmt)
+            for maskstmt in self.node.oir_node.iter_tree().if_isinstance(oir.MaskStmt, oir.For)
             for stmt in maskstmt.body
             for assign in stmt.iter_tree().if_isinstance(oir.AssignStmt)
             for acc in assign.left.iter_tree().if_isinstance(oir.FieldAccess)
         }
-
+        dynamic_accesses |= {
+            get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=False)
+            for whilestmt in self.node.oir_node.iter_tree().if_isinstance(oir.While)
+            for acc in whilestmt.cond.iter_tree().if_isinstance(oir.FieldAccess)
+        }
+        dynamic_accesses |= {
+            get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=False)
+            for whilestmt in self.node.oir_node.iter_tree().if_isinstance(oir.While)
+            for stmt in whilestmt.body
+            for assign in stmt.iter_tree().if_isinstance(oir.AssignStmt)
+            for acc in assign.right.iter_tree().if_isinstance(oir.FieldAccess)
+        }
+        dynamic_accesses |= {
+            get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=True)
+            for whilestmt in self.node.oir_node.iter_tree().if_isinstance(oir.While)
+            for stmt in whilestmt.body
+            for assign in stmt.iter_tree().if_isinstance(oir.AssignStmt)
+            for acc in assign.left.iter_tree().if_isinstance(oir.FieldAccess)
+        }
+        dynamic_accesses |= {
+            get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=False)
+            for assign in self.node.oir_node.iter_tree().if_isinstance(oir.AssignStmt)
+            for acc in assign.right.iter_tree().if_isinstance(oir.FieldAccess)
+            if isinstance(acc.offset, common.VariableKOffset)
+        }
+        dynamic_accesses |= {
+            get_tasklet_symbol(acc.name, acc.offset.to_tuple(), is_target=True)
+            for assign in self.node.oir_node.iter_tree().if_isinstance(oir.AssignStmt)
+            for acc in assign.right.iter_tree().if_isinstance(oir.FieldAccess)
+            if isinstance(acc.offset, common.VariableKOffset)
+        }
         in_memlets = dict()
         for name, offsets in access_collection.read_offsets().items():
             shape = [
@@ -697,20 +805,28 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
 
             for offset in offsets:
                 idx_subset_strs = _get_offset_subset_str(origin, offset, dimensions)
-                idx_subset_strs.extend(f"0:{dim}" for dim in data_dims)
                 if name in region_accesses:
-                    subset_strs = (
-                        dynamic_subset_strs[: sum(dimensions[:2])]
-                        + idx_subset_strs[sum(dimensions[:2]) :]
-                    )
-                    acc_name = get_tasklet_symbol(name, (0, 0, offset[2]), is_target=False)
+                    subset_strs = dynamic_subset_strs[: sum(dimensions[:2])]
+                    ij_offs = [0, 0]
                 else:
-                    subset_strs = idx_subset_strs
-                    acc_name = get_tasklet_symbol(name, offset, is_target=False)
+                    subset_strs = idx_subset_strs[: (sum(dimensions[:2]))]
+                    ij_offs = list(offset[:2])
+                if name in variable_k_accesses:
+                    acc_name = get_tasklet_symbol(name, ij_offs + [0], is_target=False)
+                    subset_strs.append(dynamic_subset_strs[sum(dimensions[:2])])
+                elif dimensions[2]:
+                    acc_name = get_tasklet_symbol(name, ij_offs + [offset[2]], is_target=False)
+                    subset_strs.append(idx_subset_strs[sum(dimensions[:2])])
+                else:
+                    acc_name = get_tasklet_symbol(name, ij_offs + [0], is_target=False)
+                if data_dims:
+                    subset_strs.extend(f"0:{dim}" for dim in data_dims)
                 in_memlets[acc_name] = dace.memlet.Memlet.simple(
                     name,
                     ",".join(subset_strs),
-                    dynamic=acc_name in dynamic_accesses,
+                    dynamic=name in region_accesses
+                    or name in variable_k_accesses
+                    or acc_name in dynamic_accesses,
                 )
 
         out_memlets = dict()
@@ -737,7 +853,9 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
 
             acc_name = "__" + name
             out_memlets[acc_name] = dace.memlet.Memlet.simple(
-                name, ",".join(subset_strs), dynamic=acc_name in dynamic_accesses
+                name,
+                ",".join(subset_strs),
+                dynamic=acc_name in dynamic_accesses or acc_name in dynamic_accesses,
             )
         return in_memlets, out_memlets
 
@@ -787,15 +905,20 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
         region_fields = {
             acc.field for acc in access_collection.ordered_accesses() if acc.region is not None
         }
+        variable_k_fields = {
+            acc.field for acc in access_collection.ordered_accesses() if acc.offset[2] is None
+        }
         tasklet_code = TaskletCodegen.apply(
             self.node.oir_node,
-            dimensions=nonflat_dimensions,
+            context_dimensions=dimensions,
+            nonflat_dimensions=nonflat_dimensions,
             origins=self.compensated_origins,
             region_fields=region_fields,
+            variable_k_fields=variable_k_fields,
             index_symbols=self.node.index_symbols,
             global_domain_symbols=self.node.global_domain_symbols,
         )
-        _, map_entry, map_exit = self.res_state.add_mapped_tasklet(
+        tasklet, map_entry, map_exit = self.res_state.add_mapped_tasklet(
             self.node.name + "_tasklet",
             map_ranges=map_ranges,
             inputs=in_memlets,
@@ -806,6 +929,16 @@ class NaiveHorizontalExecutionExpander(OIRLibraryNodeExpander):
             external_edges=True,
             schedule=self.node.map_schedule,
         )
+        for edge in self.res_state.in_edges(tasklet):
+            if edge.data.data is None:
+                continue
+            array = self.res_sdfg.arrays[edge.data.data]
+            if any(
+                isinstance(acc.offset, common.VariableKOffset)
+                for acc in self.node.oir_node.iter_tree().if_isinstance(oir.FieldAccess)
+                if edge.data.data == acc.name
+            ):
+                tasklet.in_connectors[edge.dst_conn] = dace.pointer(array.dtype)
 
 
 class BlockVerticalLoopExpander(NaiveVerticalLoopExpander):

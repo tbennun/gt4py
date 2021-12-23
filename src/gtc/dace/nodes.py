@@ -34,6 +34,7 @@ from gtc.dace.utils import (
     get_node_name_mapping,
 )
 from gtc.oir import CacheDesc, HorizontalExecution, Interval, VerticalLoop, VerticalLoopSection
+from gtc.common import VariableKOffset
 
 
 class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
@@ -41,9 +42,9 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
     def as_oir(self):
         raise NotImplementedError("Implement in child class.")
 
-    @abstractmethod
-    def __eq__(self, other):
-        raise NotImplementedError("Implement in child class.")
+    # @abstractmethod
+    # def __eq__(self, other):
+    #     raise NotImplementedError("Implement in child class.")
 
     def to_json(self, parent):
         protocol = pickle.DEFAULT_PROTOCOL
@@ -159,21 +160,21 @@ class VerticalLoopLibraryNode(OIRLibraryNode):
             caches=self.caches,
         )
 
-    def __eq__(self, other):
-        try:
-            assert isinstance(other, VerticalLoopLibraryNode)
-            assert self.loop_order == other.loop_order
-            assert self.caches == other.caches
-            assert len(self.sections) == len(other.sections)
-            for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
-                assert interval1 == interval2
-                assert_sdfg_equal(he_sdfg1, he_sdfg2)
-        except AssertionError:
-            return False
-        return True
-
-    def __hash__(self):
-        return super(OIRLibraryNode, self).__hash__()
+    # def __eq__(self, other):
+    #     try:
+    #         assert isinstance(other, VerticalLoopLibraryNode)
+    #         assert self.loop_order == other.loop_order
+    #         assert self.caches == other.caches
+    #         assert len(self.sections) == len(other.sections)
+    #         for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
+    #             assert interval1 == interval2
+    #             assert_sdfg_equal(he_sdfg1, he_sdfg2)
+    #     except AssertionError:
+    #         return False
+    #     return True
+    #
+    # def __hash__(self):
+    #     return super(OIRLibraryNode, self).__hash__()
 
 
 @library.node
@@ -217,10 +218,17 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
     def validate(self, parent_sdfg: dace.SDFG, parent_state: dace.SDFGState, *args, **kwargs):
         get_node_name_mapping(parent_state, self)
 
-    def __eq__(self, other):
-        if not isinstance(other, HorizontalExecutionLibraryNode):
-            return False
-        return self.as_oir() == other.as_oir()
+    # def __eq__(self, other):
+    #     if not isinstance(other, HorizontalExecutionLibraryNode):
+    #         return False
+    #     return self.as_oir() == other.as_oir()
+    #
+    # def __hash__(self):
+    #     return super(OIRLibraryNode, self).__hash__()
 
-    def __hash__(self):
-        return super(OIRLibraryNode, self).__hash__()
+    @property
+    def free_symbols(self):
+        res = super().free_symbols
+        if len(self.oir_node.iter_tree().if_isinstance(VariableKOffset).to_list()) > 0:
+            res.add("k")
+        return res

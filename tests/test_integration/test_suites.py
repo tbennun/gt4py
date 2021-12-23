@@ -18,6 +18,7 @@
 import numpy as np
 import pytest
 
+import gt4py.storage
 from gt4py import gtscript
 from gt4py import testing as gt_testing
 from gt4py.gtscript import PARALLEL, computation, interval
@@ -640,7 +641,7 @@ class TestNon3DFields(gt_testing.StencilTestSuite):
             in_range=(-10, 10), axes="K", boundary=[(0, 0), (0, 0), (0, 0)]
         ),
         "another_field": gt_testing.field(
-            in_range=(-10, 10), axes="IJ", data_dims=(3, 2, 2), boundary=[(1, 1), (1, 1), (0, 0)]
+            in_range=(-10, 10), axes="IJ", data_dims=(3, 2, 2), boundary=[(0, 1), (0, 1), (0, 0)]
         ),
         "field_out": gt_testing.field(
             in_range=(-10, 10), axes="IJK", data_dims=(3, 2), boundary=[(0, 0), (0, 0), (0, 0)]
@@ -694,14 +695,14 @@ class TestNon3DFields(gt_testing.StencilTestSuite):
 
         field_out[:, :, :, 1, 0] = (
             field_in[:]
-            + another_field[2:, 2:, None, 0, 0, 0]
-            + another_field[2:, 2:, None, 0, 0, 1]
+            + another_field[1:, 1:, None, 0, 0, 0]
+            + another_field[1:, 1:, None, 0, 0, 1]
         )
         field_out[:, :, :, 1, 1] = 3 * (
-            another_field[2:, 2:, None, 1, 0, 0]
-            + another_field[2:, 2:, None, 1, 0, 1]
-            + another_field[2:, 2:, None, 1, 1, 0]
-            + another_field[2:, 2:, None, 1, 1, 1]
+            another_field[1:, 1:, None, 1, 0, 0]
+            + another_field[1:, 1:, None, 1, 0, 1]
+            + another_field[1:, 1:, None, 1, 1, 0]
+            + another_field[1:, 1:, None, 1, 1, 1]
         )
 
         field_out[:, :, :, 2, 0] = (
@@ -1331,7 +1332,7 @@ class TestVariableKRead(gt_testing.StencilTestSuite):
         "index": np.int32,
     }
     domain_range = [(2, 2), (2, 2), (2, 8)]
-    backends = [backend for backend in INTERNAL_BACKENDS if backend.values[0] not in ["gtc:dace"]]
+    backends = INTERNAL_BACKENDS
     symbols = {
         "field_in": gt_testing.field(
             in_range=(-10, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
@@ -1350,3 +1351,576 @@ class TestVariableKRead(gt_testing.StencilTestSuite):
 
     def validation(field_in, field_out, index, *, domain, origin):
         field_out[:, :, 1:] = field_in[:, :, (np.arange(field_in.shape[-1]) + index)[1:]]
+
+
+class TestVariableKAndStatic(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+        "index": np.int32,
+    }
+    domain_range = [(2, 2), (2, 2), (2, 8)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "index": gt_testing.field(in_range=(-1, 0), axes="K", boundary=[(0, 0), (0, 0), (0, 0)]),
+    }
+
+    def definition(field_in, field_out, index):
+        with computation(PARALLEL), interval(1, -1):
+            field_out[0, 0, 0] = (
+                field_in[0, 0, index]  # noqa: F841  # Local name is assigned to but never used
+                + field_in[0, 0, 1]
+            )
+
+    def validation(field_in, field_out, index, *, domain, origin):
+        idx = (np.arange(domain[-1]) + index)[1:-1]
+        field_out[:, :, 1:-1] = field_in[:, :, idx]
+        field_out[:, :, 1:-1] += field_in[:, :, 2:]
+
+
+class TestVariableKAndIntervals(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+        "index": np.int32,
+    }
+    domain_range = [(2, 2), (2, 2), (2, 8)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "index": gt_testing.field(in_range=(-1, 0), axes="K", boundary=[(0, 0), (0, 0), (0, 0)]),
+    }
+
+    def definition(field_in, field_out, index):
+        with computation(PARALLEL), interval(1, -1):
+            field_out[0, 0, 0] = (
+                field_in[0, 0, index]  # noqa: F841  # Local name is assigned to but never used
+                + field_in[0, 0, 0]
+            )
+        with computation(PARALLEL), interval(-1, None):
+            field_out[0, 0, 0] = (
+                field_in[0, 0, index]  # noqa: F841  # Local name is assigned to but never used
+                + field_in[0, 0, 0]
+            )
+
+    def validation(field_in, field_out, index, *, domain, origin):
+        idx = (np.arange(domain[-1]) + index)[1:]
+        field_out[:, :, 1:] = field_in[:, :, idx]
+        field_out[:, :, 1:] += field_in[:, :, 1:]
+
+
+class TestVariableKAndReadOutside(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+        "index": np.int32,
+    }
+    domain_range = [(2, 2), (2, 2), (2, 8)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (1, 0)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+        "index": gt_testing.field(in_range=(-1, 0), axes="K", boundary=[(0, 0), (0, 0), (0, 0)]),
+    }
+
+    def definition(field_in, field_out, index):
+        with computation(PARALLEL), interval(1, None):
+            field_out[0, 0, 0] = (
+                field_in[0, 0, index]  # noqa: F841  # Local name is assigned to but never used
+                + field_in[0, 0, -2]
+            )
+
+    def validation(field_in, field_out, index, *, domain, origin):
+        idx = 1 + (np.arange(domain[-1]) + index)[1:]
+        field_out[:, :, 1:] = field_in[:, :, idx]
+        field_out[:, :, 1:] += field_in[:, :, :-2]
+
+
+class TestDiagonalKOffset(gt_testing.StencilTestSuite):
+    dtypes = {
+        "field_in": np.float64,
+        "field_out": np.float64,
+    }
+    domain_range = [(2, 2), (2, 2), (2, 8)]
+    backends = INTERNAL_BACKENDS
+    symbols = {
+        "field_in": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (1, 0), (0, 1)]
+        ),
+        "field_out": gt_testing.field(
+            in_range=(0.1, 10), axes="IJK", boundary=[(0, 0), (0, 0), (0, 0)]
+        ),
+    }
+
+    def definition(field_in, field_out):
+        with computation(PARALLEL), interval(...):
+            field_out = field_in[0, 0, 1]
+        with computation(PARALLEL), interval(0, -1):
+            field_out += field_in[0, -1, 1]
+
+    def validation(field_in, field_out, *, domain, origin):
+        field_out[:, :, :] = field_in[:, 1:, 1:]
+        field_out[:, :, :-1] += field_in[:, :-1, 1:-1]
+
+
+def test_test():
+    backend = "gtc:dace"
+    FloatField = gtscript.Field[gtscript.IJK, np.float64]
+    IntFieldIJ = gtscript.Field[gtscript.IJ, np.int64]
+
+    def lagrangian_contributions(
+        q: FloatField,
+        pe1: FloatField,
+        pe2: FloatField,
+        q4_1: FloatField,
+        q4_2: FloatField,
+        q4_3: FloatField,
+        q4_4: FloatField,
+        dp1: FloatField,
+        lev: IntFieldIJ,
+    ):
+        with computation(FORWARD), interval(...):
+            pl = (pe2 - pe1[0, 0, lev]) / dp1[0, 0, lev]
+            if pe2[0, 0, 1] <= pe1[0, 0, lev + 1]:
+                pr = (pe2[0, 0, 1] - pe1[0, 0, lev]) / dp1[0, 0, lev]
+                q = (
+                    q4_2[0, 0, lev]
+                    + 0.5 * (q4_4[0, 0, lev] + q4_3[0, 0, lev] - q4_2[0, 0, lev]) * (pr + pl)
+                    - q4_4[0, 0, lev] * 1.0 / 3.0 * (pr * (pr + pl) + pl * pl)
+                )
+            else:
+                qsum = (pe1[0, 0, lev + 1] - pe2) * (
+                    q4_2[0, 0, lev]
+                    + 0.5 * (q4_4[0, 0, lev] + q4_3[0, 0, lev] - q4_2[0, 0, lev]) * (1.0 + pl)
+                    - q4_4[0, 0, lev] * 1.0 / 3.0 * (1.0 + pl * (1.0 + pl))
+                )
+                lev = lev + 1
+                while pe1[0, 0, lev + 1] < pe2[0, 0, 1]:
+                    qsum += dp1[0, 0, lev] * q4_1[0, 0, lev]
+                    lev = lev + 1
+                dp = pe2[0, 0, 1] - pe1[0, 0, lev]
+                esl = dp / dp1[0, 0, lev]
+                qsum += dp * (
+                    q4_2[0, 0, lev]
+                    + 0.5
+                    * esl
+                    * (
+                        q4_3[0, 0, lev]
+                        - q4_2[0, 0, lev]
+                        + q4_4[0, 0, lev] * (1.0 - (2.0 / 3.0) * esl)
+                    )
+                )
+                q = qsum / (pe2[0, 0, 1] - pe2)
+            lev = lev - 1
+
+    cand_stencil = gtscript.stencil(definition=lagrangian_contributions, backend=backend)
+    ref_stencil = gtscript.stencil(definition=lagrangian_contributions, backend="numpy")
+    domain = (10, 10, 10)
+
+    q_data = np.random.randn(*domain)
+    pe1_data = np.cumsum(np.abs(np.random.randn(*domain)), axis=2)
+    pe2_data = np.cumsum(np.abs(np.random.randn(*domain)), axis=2)
+    pe1_data -= pe1_data[:, :, 0:1]
+    pe2_data -= pe2_data[:, :, 0:1]
+    maxim = np.minimum(pe1_data[:, :, -1], pe2_data[:, :, -1])
+    pe1_data = maxim[:, :, np.newaxis] * (pe1_data / pe1_data[:, :, -1:])
+    pe2_data = maxim[:, :, np.newaxis] * (pe2_data / pe2_data[:, :, -1:])
+    np.testing.assert_allclose(pe1_data[:, :, -1], pe2_data[:, :, -1])
+    q4_1_data = np.random.randn(*domain)
+    q4_2_data = np.random.randn(*domain)
+    q4_3_data = np.random.randn(*domain)
+    q4_4_data = np.random.randn(*domain)
+    dp1_data = np.random.randn(*domain)
+    lev_data = np.zeros(domain[:2], dtype=np.int64)
+
+    pe1 = gt4py.storage.from_array(pe1_data, default_origin=(0, 0, 0), backend=backend)
+    pe2 = gt4py.storage.from_array(pe2_data, default_origin=(0, 0, 0), backend=backend)
+    q4_1 = gt4py.storage.from_array(q4_1_data, default_origin=(0, 0, 0), backend=backend)
+    q4_2 = gt4py.storage.from_array(q4_2_data, default_origin=(0, 0, 0), backend=backend)
+    q4_3 = gt4py.storage.from_array(q4_3_data, default_origin=(0, 0, 0), backend=backend)
+    q4_4 = gt4py.storage.from_array(q4_4_data, default_origin=(0, 0, 0), backend=backend)
+    dp1 = gt4py.storage.from_array(dp1_data, default_origin=(0, 0, 0), backend=backend)
+    q_ref = gt4py.storage.from_array(q_data, default_origin=(0, 0, 0), backend=backend)
+    q_cand = gt4py.storage.from_array(q_data, default_origin=(0, 0, 0), backend=backend)
+    lev_ref = gt4py.storage.from_array(
+        lev_data,
+        default_origin=(0, 0, 0),
+        backend=backend,
+        dtype=np.int64,
+        mask=[True, True, False],
+    )
+    lev_cand = gt4py.storage.from_array(
+        lev_data,
+        default_origin=(0, 0, 0),
+        backend=backend,
+        dtype=np.int64,
+        mask=[True, True, False],
+    )
+
+    cand_stencil(
+        q=q_cand,
+        pe1=pe1,
+        pe2=pe2,
+        q4_1=q4_1,
+        q4_2=q4_2,
+        q4_3=q4_3,
+        q4_4=q4_4,
+        dp1=dp1,
+        lev=lev_cand,
+        domain=[domain[0], domain[1], 9],
+    )
+    ref_stencil(
+        q=q_ref,
+        pe1=pe1,
+        pe2=pe2,
+        q4_1=q4_1,
+        q4_2=q4_2,
+        q4_3=q4_3,
+        q4_4=q4_4,
+        dp1=dp1,
+        lev=lev_ref,
+        domain=[domain[0], domain[1], 9],
+    )
+
+    np.testing.assert_allclose(np.asarray(q_ref), np.asarray(q_cand))
+    np.testing.assert_allclose(np.asarray(lev_ref), np.asarray(lev_cand))
+
+
+def test_test():
+
+    from gt4py.gtscript import AxisIndex
+
+    FloatField = gtscript.Field[np.float64]
+    FloatFieldIJ = gtscript.Field[gtscript.IJ, np.float64]
+
+    class ppm:
+        # volume-conserving cubic with 2nd drv=0 at end point:
+        # non-monotonic
+        c1 = -2.0 / 14.0
+        c2 = 11.0 / 14.0
+        c3 = 5.0 / 14.0
+
+        # PPM volume mean form
+        p1 = 7.0 / 12.0
+        p2 = -1.0 / 12.0
+
+        s11 = 11.0 / 14.0
+        s14 = 4.0 / 7.0
+        s15 = 3.0 / 14.0
+
+        @gtscript.function
+        def pert_ppm_standard_constraint_fcn(a0: FloatField, al: FloatField, ar: FloatField):
+            if al * ar < 0.0:
+                da1 = al - ar
+                da2 = da1 ** 2
+                a6da = 3.0 * (al + ar) * da1
+                if a6da < -da2:
+                    ar = -2.0 * al
+                elif a6da > da2:
+                    al = -2.0 * ar
+            else:
+                # effect of dm=0 included here
+                al = 0.0
+                ar = 0.0
+            return al, ar
+
+        @gtscript.function
+        def pert_ppm_positive_definite_constraint_fcn(
+            a0: FloatField, al: FloatField, ar: FloatField
+        ):
+            if a0 <= 0.0:
+                al = 0.0
+                ar = 0.0
+            else:
+                a4 = -3.0 * (ar + al)
+                da1 = ar - al
+                if abs(da1) < -a4:
+                    fmin = a0 + 0.25 / a4 * da1 ** 2 + a4 * (1.0 / 12.0)
+                    if fmin < 0.0:
+                        if ar > 0.0 and al > 0.0:
+                            ar = 0.0
+                            al = 0.0
+                        elif da1 > 0.0:
+                            ar = -2.0 * al
+                    else:
+                        al = -2.0 * ar
+
+            return al, ar
+
+    @gtscript.function
+    def sign(a, b):
+        asignb = abs(a)
+        if b > 0:
+            asignb = asignb
+        else:
+            asignb = -asignb
+        return asignb
+
+    @gtscript.function
+    def apply_flux(courant, q, fx1, mask):
+        """
+        Args:
+            courant: any value whose sign is the same as the sign of
+                the x-wind on cell corners
+            q: scalar being transported, on x-centers
+            fx1: flux of q in units of q, on x-interfaces
+            mask: fx1 is multiplied by this before being applied
+        """
+        return q[-1, 0, 0] + fx1 * mask if courant > 0.0 else q + fx1 * mask
+
+    @gtscript.function
+    def fx1_fn(courant, br, b0, bl):
+        """
+        Args:
+            courant: courant number, u * dt / dx (unitless)
+            br: ???
+            b0: br + bl
+            bl: ???
+        """
+        if courant > 0.0:
+            ret = (1.0 - courant) * (br[-1, 0, 0] - courant * b0[-1, 0, 0])
+        else:
+            ret = (1.0 + courant) * (bl + courant * b0)
+        return ret
+
+    @gtscript.function
+    def get_advection_mask(bl, b0, br):
+        from __externals__ import mord
+
+        if __INLINED(mord == 5):
+            smt5 = bl * br < 0
+        else:
+            smt5 = (3.0 * abs(b0)) < abs(bl - br)
+
+        if smt5[-1, 0, 0] or smt5[0, 0, 0]:
+            advection_mask = 1.0
+        else:
+            advection_mask = 0.0
+
+        return advection_mask
+
+    @gtscript.function
+    def get_flux(q: FloatField, courant: FloatField, al: FloatField):
+        bl = al[0, 0, 0] - q[0, 0, 0]
+        br = al[1, 0, 0] - q[0, 0, 0]
+        b0 = bl + br
+
+        advection_mask = get_advection_mask(bl, b0, br)
+        fx1 = fx1_fn(courant, br, b0, bl)
+        return apply_flux(courant, q, fx1, advection_mask)  # noqa
+
+    @gtscript.function
+    def get_flux_ord8plus(q: FloatField, courant: FloatField, bl: FloatField, br: FloatField):
+        b0 = bl + br
+        fx1 = fx1_fn(courant, br, b0, bl)
+        return apply_flux(courant, q, fx1, 1.0)
+
+    @gtscript.function
+    def dm_iord8plus(q: FloatField):
+        xt = 0.25 * (q[1, 0, 0] - q[-1, 0, 0])
+        dqr = max(max(q, q[-1, 0, 0]), q[1, 0, 0]) - q
+        dql = q - min(min(q, q[-1, 0, 0]), q[1, 0, 0])
+        return sign(min(min(abs(xt), dqr), dql), xt)
+
+    @gtscript.function
+    def al_iord8plus(q: FloatField, dm: FloatField):
+        return 0.5 * (q[-1, 0, 0] + q) + 1.0 / 3.0 * (dm[-1, 0, 0] - dm)
+
+    @gtscript.function
+    def blbr_iord8(q: FloatField, al: FloatField, dm: FloatField):
+        xt = 2.0 * dm
+        bl = -1.0 * sign(min(abs(xt), abs(al - q)), xt)
+        br = sign(min(abs(xt), abs(al[1, 0, 0] - q)), xt)
+        return bl, br
+
+    @gtscript.function
+    def xt_dxa_edge_0_base(q, dxa):
+        return 0.5 * (
+            ((2.0 * dxa + dxa[-1, 0]) * q - dxa * q[-1, 0, 0]) / (dxa[-1, 0] + dxa)
+            + ((2.0 * dxa[1, 0] + dxa[2, 0]) * q[1, 0, 0] - dxa[1, 0] * q[2, 0, 0])
+            / (dxa[1, 0] + dxa[2, 0])
+        )
+
+    @gtscript.function
+    def xt_dxa_edge_1_base(q, dxa):
+        return 0.5 * (
+            ((2.0 * dxa[-1, 0] + dxa[-2, 0]) * q[-1, 0, 0] - dxa[-1, 0] * q[-2, 0, 0])
+            / (dxa[-2, 0] + dxa[-1, 0])
+            + ((2.0 * dxa + dxa[1, 0]) * q - dxa * q[1, 0, 0]) / (dxa + dxa[1, 0])
+        )
+
+    @gtscript.function
+    def xt_dxa_edge_0(q, dxa):
+        from __externals__ import xt_minmax
+
+        xt = xt_dxa_edge_0_base(q, dxa)
+        if __INLINED(xt_minmax):
+            minq = min(min(min(q[-1, 0, 0], q), q[1, 0, 0]), q[2, 0, 0])
+            maxq = max(max(max(q[-1, 0, 0], q), q[1, 0, 0]), q[2, 0, 0])
+            xt = min(max(xt, minq), maxq)
+        return xt
+
+    @gtscript.function
+    def xt_dxa_edge_1(q, dxa):
+        from __externals__ import xt_minmax
+
+        xt = xt_dxa_edge_1_base(q, dxa)
+        if __INLINED(xt_minmax):
+            minq = min(min(min(q[-2, 0, 0], q[-1, 0, 0]), q), q[1, 0, 0])
+            maxq = max(max(max(q[-2, 0, 0], q[-1, 0, 0]), q), q[1, 0, 0])
+            xt = min(max(xt, minq), maxq)
+        return xt
+
+    @gtscript.function
+    def compute_al(q: FloatField, dxa: FloatFieldIJ):
+        """
+        Interpolate q at interface.
+
+        Inputs:
+            q: transported scalar centered along the x-direction
+            dxa: dx on A-grid (?)
+
+        Returns:
+            q interpolated to x-interfaces
+        """
+        from __externals__ import i_end, i_start, iord
+
+        compile_assert(iord < 8)
+
+        al = ppm.p1 * (q[-1, 0, 0] + q) + ppm.p2 * (q[-2, 0, 0] + q[1, 0, 0])
+
+        if __INLINED(iord < 0):
+            compile_assert(False)
+            al = max(al, 0.0)
+
+        with horizontal(region[i_start - 1, :], region[i_end, :]):
+            al = ppm.c1 * q[-2, 0, 0] + ppm.c2 * q[-1, 0, 0] + ppm.c3 * q
+        with horizontal(region[i_start, :], region[i_end + 1, :]):
+            al = 0.5 * (
+                ((2.0 * dxa[-1, 0] + dxa[-2, 0]) * q[-1, 0, 0] - dxa[-1, 0] * q[-2, 0, 0])
+                / (dxa[-2, 0] + dxa[-1, 0])
+                + ((2.0 * dxa[0, 0] + dxa[1, 0]) * q[0, 0, 0] - dxa[0, 0] * q[1, 0, 0])
+                / (dxa[0, 0] + dxa[1, 0])
+            )
+        with horizontal(region[i_start + 1, :], region[i_end + 2, :]):
+            al = ppm.c3 * q[-1, 0, 0] + ppm.c2 * q[0, 0, 0] + ppm.c1 * q[1, 0, 0]
+
+        return al
+
+    @gtscript.function
+    def bl_br_edges(bl, br, q, dxa, al, dm):
+        from __externals__ import i_end, i_start
+
+        # TODO(eddied): This temporary prevents race conditions in regions
+        al_ip1 = al[1, 0, 0]
+
+        with horizontal(region[i_start - 1, :]):
+            # TODO(rheag) when possible
+            # dm_left = dm_iord8plus(q[-1, 0, 0])
+            xt = 0.25 * (q - q[-2, 0, 0])
+            dqr = max(max(q[-1, 0, 0], q[-2, 0, 0]), q) - q[-1, 0, 0]
+            dql = q[-1, 0, 0] - min(min(q[-1, 0, 0], q[-2, 0, 0]), q)
+            dm_left = sign(min(min(abs(xt), dqr), dql), xt)
+            xt_bl = ppm.s14 * dm_left + ppm.s11 * (q[-1, 0, 0] - q) + q
+            xt_br = xt_dxa_edge_0(q, dxa)
+
+        with horizontal(region[i_start, :]):
+            # TODO(rheag) when possible
+            # dm_right = dm_iord8plus(q[1, 0, 0])
+            xt = 0.25 * (q[2, 0, 0] - q)
+            dqr = max(max(q[1, 0, 0], q), q[2, 0, 0]) - q[1, 0, 0]
+            dql = q[1, 0, 0] - min(min(q[1, 0, 0], q), q[2, 0, 0])
+            dm_right = sign(min(min(abs(xt), dqr), dql), xt)
+            xt_bl = ppm.s14 * dm_left + ppm.s11 * (q[-1, 0, 0] - q) + q
+            xt_bl = xt_dxa_edge_1(q, dxa)
+            xt_br = ppm.s15 * q + ppm.s11 * q[1, 0, 0] - ppm.s14 * dm_right
+
+        with horizontal(region[i_start + 1, :]):
+            xt_bl = ppm.s15 * q[-1, 0, 0] + ppm.s11 * q - ppm.s14 * dm
+            xt_br = al_ip1
+
+        with horizontal(region[i_end - 1, :]):
+            xt_bl = al
+            xt_br = ppm.s15 * q[1, 0, 0] + ppm.s11 * q + ppm.s14 * dm
+
+        with horizontal(region[i_end, :]):
+            # TODO(rheag) when possible
+            # dm_left_end = dm_iord8plus(q[-1, 0, 0])
+            xt = 0.25 * (q - q[-2, 0, 0])
+            dqr = max(max(q[-1, 0, 0], q[-2, 0, 0]), q) - q[-1, 0, 0]
+            dql = q[-1, 0, 0] - min(min(q[-1, 0, 0], q[-2, 0, 0]), q)
+            dm_left_end = sign(min(min(abs(xt), dqr), dql), xt)
+            xt_bl = ppm.s15 * q + ppm.s11 * q[-1, 0, 0] + ppm.s14 * dm_left_end
+            xt_br = xt_dxa_edge_0(q, dxa)
+
+        with horizontal(region[i_end + 1, :]):
+            # TODO(rheag) when possible
+            # dm_right_end = dm_iord8plus(q[1, 0, 0])
+            xt = 0.25 * (q[2, 0, 0] - q)
+            dqr = max(max(q[1, 0, 0], q), q[2, 0, 0]) - q[1, 0, 0]
+            dql = q[1, 0, 0] - min(min(q[1, 0, 0], q), q[2, 0, 0])
+            dm_right_end = sign(min(min(abs(xt), dqr), dql), xt)
+            xt_bl = xt_dxa_edge_1(q, dxa)
+            xt_br = ppm.s11 * (q[1, 0, 0] - q) - ppm.s14 * dm_right_end + q
+
+        with horizontal(region[i_start - 1 : i_start + 2, :], region[i_end - 1 : i_end + 2, :]):
+            bl = xt_bl - q
+            br = xt_br - q
+
+        return bl, br
+
+    @gtscript.function
+    def compute_blbr_ord8plus(q: FloatField, dxa: FloatFieldIJ):
+        from __externals__ import i_end, i_start, iord
+
+        dm = dm_iord8plus(q)
+        al = al_iord8plus(q, dm)
+
+        compile_assert(iord == 8)
+
+        bl, br = blbr_iord8(q, al, dm)
+        bl, br = bl_br_edges(bl, br, q, dxa, al, dm)
+
+        with horizontal(region[i_start - 1 : i_start + 2, :], region[i_end - 1 : i_end + 2, :]):
+            bl, br = ppm.pert_ppm_standard_constraint_fcn(q, bl, br)
+
+        return bl, br
+
+    @gtscript.stencil(
+        backend="gtc:dace",
+        externals={
+            "iord": 8,
+            "mord": 8,
+            "xt_minmax": True,
+            "i_start": AxisIndex(axis=gtscript.I, index=0, offset=0),
+            "i_end": AxisIndex(axis=gtscript.I, index=-1, offset=-1),
+        },
+    )
+    def compute_x_flux(
+            q: FloatField, courant: FloatField, dxa: FloatFieldIJ, xflux: FloatField
+    ):
+        from __externals__ import mord
+
+        with computation(PARALLEL), interval(...):
+            if __INLINED(mord < 8):
+                al = compute_al(q, dxa)
+                xflux = get_flux(q, courant, al)
+            else:
+                bl, br = compute_blbr_ord8plus(q, dxa)
+                xflux = get_flux_ord8plus(q, courant, bl, br)
+

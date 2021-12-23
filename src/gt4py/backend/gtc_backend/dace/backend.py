@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 import dace
 import numpy as np
 from dace.transformation import strict_transformations
+from dace.sdfg.utils import inline_sdfgs, fuse_states
 from dace.transformation.dataflow import MapCollapse
 
 import gt4py.definitions
@@ -38,7 +39,7 @@ from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
 from gtc import gtir, gtir_to_oir
-from gtc.common import LevelMarker
+from gtc.common import LevelMarker, CartesianOffset
 from gtc.dace.nodes import HorizontalExecutionLibraryNode, VerticalLoopLibraryNode
 from gtc.dace.oir_to_dace import OirSDFGBuilder
 from gtc.dace.utils import array_dimensions, replace_strides
@@ -46,6 +47,7 @@ from gtc.passes.gtir_legacy_extents import compute_legacy_extents
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
 from gtc.passes.oir_optimizations.horizontal_execution_merging import GreedyMerging
+from gtc.passes.oir_optimizations.inlining import MaskInlining
 from gtc.passes.oir_pipeline import DefaultPipeline
 
 
@@ -54,7 +56,8 @@ if TYPE_CHECKING:
 
 
 def post_expand_trafos(sdfg: dace.SDFG):
-
+    while inline_sdfgs(sdfg) or fuse_states(sdfg):
+        pass
     sdfg.apply_strict_transformations()
     state = sdfg.node(0)
     sdict = state.scope_children()
@@ -90,11 +93,11 @@ def to_device(sdfg: dace.SDFG, device):
                     for node, _ in section.all_nodes_recursive():
                         if isinstance(node, HorizontalExecutionLibraryNode):
                             node.map_schedule = dace.ScheduleType.GPU_ThreadBlock
-    else:
-        for node, _ in sdfg.all_nodes_recursive():
-            if isinstance(node, VerticalLoopLibraryNode):
-                node.implementation = "block"
-                node.tile_sizes = [2, 2]
+    # else:
+    #     for node, _ in sdfg.all_nodes_recursive():
+    #         if isinstance(node, VerticalLoopLibraryNode):
+    #             node.implementation = "block"
+    #             node.tile_sizes = [2, 2]
 
 
 def expand_and_wrap_sdfg(
@@ -112,7 +115,7 @@ def expand_and_wrap_sdfg(
     for array in inner_sdfg.arrays.values():
         if array.transient:
             array.lifetime = dace.AllocationLifetime.Persistent
-    inner_sdfg = dace.SDFG.from_json(inner_sdfg.to_json())
+    # inner_sdfg = dace.SDFG.from_json(inner_sdfg.to_json())
     inner_sdfg.expand_library_nodes(recursive=True)
     post_expand_trafos(inner_sdfg)
 
@@ -190,6 +193,7 @@ class GTCDaCeExtGenerator:
         default_pipeline = DefaultPipeline(
             skip=[
                 GreedyMerging,
+                MaskInlining,
                 FillFlushToLocalKCaches,
             ]
         )
@@ -248,7 +252,11 @@ class KOriginsVisitor(NodeVisitor):
         self, node: gtir.FieldAccess, *, k_origins, interval: gtir.Interval
     ) -> None:
         if interval.start.level == LevelMarker.START:
-            candidate = max(0, -interval.start.offset - node.offset.k)
+            if not isinstance(node.offset, CartesianOffset):
+                candidate = 0
+            else:
+                candidate = -interval.start.offset - node.offset.k
+            candidate = max(0, candidate)
         else:
             candidate = 0
         k_origins[node.name] = max(k_origins.get(node.name, 0), candidate)
@@ -292,7 +300,6 @@ class DaCeComputationCodegen:
     @classmethod
     def apply(cls, gtir, sdfg: dace.SDFG):
         self = cls()
-
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")

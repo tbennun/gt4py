@@ -107,9 +107,11 @@ def get_tasklet_symbol(name, offset, is_target):
         return f"__{name}"
 
     acc_name = name + "__"
-    suffix = "_".join(
-        var + ("m" if o < 0 else "p") + f"{abs(o):d}" for var, o in zip("ijk", offset) if o != 0
-    )
+    offset_strs = []
+    for var, o in zip("ijk", offset):
+        if o is not None and o != 0:
+            offset_strs.append(var + ("m" if o < 0 else "p") + f"{abs(o):d}")
+    suffix = "_".join(offset_strs)
     if suffix != "":
         acc_name += suffix
     return acc_name
@@ -440,37 +442,40 @@ class CartesianIJIndexSpace(tuple):
             )
         )
 
-    def extended(self, access: GenericAccess):
-        if access.region is None:
-            return CartesianIJIndexSpace.from_access(access).compose(self)
 
-        res = []
+def iteration_to_access_space(iteration_space: CartesianIJIndexSpace, access: GenericAccess):
+    if access.region is None:
+        return CartesianIJIndexSpace.from_access(access).compose(iteration_space)
 
-        for region_interval, index_interval, off in zip(
-            (access.region.i, access.region.j),
-            self,
-            access.offset[:2],
-        ):
-            dim_tuple = list(index_interval)
+    res = []
 
-            if region_interval.start is not None:
-                if region_interval.start.level == common.LevelMarker.START:
-                    offset = region_interval.start.offset - index_interval[0]
-                    dim_tuple[0] += min(0, off + offset)
-            else:
-                dim_tuple[0] += min(0, off)
+    for region_interval, index_interval, off in zip(
+        (access.region.i, access.region.j),
+        iteration_space,
+        access.offset[:2],
+    ):
+        dim_tuple = list(index_interval)
 
-            if region_interval.end is not None:
-                if region_interval.end.level == common.LevelMarker.END:
+        if region_interval.start is not None:
+            if region_interval.start.level == common.LevelMarker.START:
+                dim_tuple[0] = min(
+                    0, max(index_interval[0] + off, region_interval.start.offset + off)
+                )
+        else:
+            dim_tuple[0] += min(0, off)
 
-                    offset = region_interval.end.offset - index_interval[1]
-                    dim_tuple[1] += max(0, off + offset)
-            else:
-                dim_tuple[1] += min(0, off)
+        if region_interval.end is not None:
+            if region_interval.end.level == common.LevelMarker.END:
 
-            res.append(tuple(dim_tuple))
+                dim_tuple[1] = max(
+                    0, min(index_interval[1] + off, region_interval.end.offset + off)
+                )
+        else:
+            dim_tuple[1] += min(0, off)
 
-        return CartesianIJIndexSpace(res)
+        res.append(tuple(dim_tuple))
+
+    return CartesianIJIndexSpace(res)
 
 
 def oir_iteration_space_computation(stencil: oir.Stencil) -> Dict[int, CartesianIterationSpace]:
@@ -606,10 +611,13 @@ def nodes_extent_calculation(
                         ext[0] = iteration_interval.start.offset
                         if region_interval.start is not None:
                             if region_interval.start.level == common.LevelMarker.START:
-                                offset = (
-                                    region_interval.start.offset - iteration_interval.start.offset
+                                # offset = (
+                                #     region_interval.start.offset - iteration_interval.start.offset
+                                # )
+                                ext[0] = max(
+                                    ext[0] + acc.offset[dim],
+                                    region_interval.start.offset + acc.offset[dim],
                                 )
-                                ext[0] += acc.offset[dim] + offset
                         else:
                             ext[0] += acc.offset[dim]
                         ext[0] = min(0, ext[0])
@@ -617,8 +625,12 @@ def nodes_extent_calculation(
                         ext[1] = iteration_interval.end.offset
                         if region_interval.end is not None:
                             if region_interval.end.level == common.LevelMarker.END:
-                                offset = region_interval.end.offset - iteration_interval.end.offset
-                                ext[1] += acc.offset[dim] + offset
+                                # offset = region_interval.end.offset - iteration_interval.end.offset
+                                # ext[1] += acc.offset[dim] + offset
+                                ext[1] = min(
+                                    ext[1] + acc.offset[dim],
+                                    region_interval.end.offset + acc.offset[dim],
+                                )
                         else:
                             ext[1] += acc.offset[dim]
                         ext[1] = max(0, ext[1])
@@ -709,10 +721,10 @@ class IntervalMapping:
     def __setitem__(self, key: oir.Interval, value: Any) -> None:
         if not isinstance(key, oir.Interval):
             raise TypeError("Only OIR intervals supported for method add of IntervalSet.")
-
+        key = oir.UnboundedInterval(start=key.start, end=key.end)
         delete = list()
         for i, (start, end) in enumerate(zip(self.interval_starts, self.interval_ends)):
-            if key.covers(oir.Interval(start=start, end=end)):
+            if key.covers(oir.UnboundedInterval(start=start, end=end)):
                 delete.append(i)
 
         for i in reversed(delete):  # so indices keep validity while deleting
@@ -727,13 +739,13 @@ class IntervalMapping:
             return
 
         for i, (start, end) in enumerate(zip(self.interval_starts, self.interval_ends)):
-            if oir.Interval(start=start, end=end).covers(key):
+            if oir.UnboundedInterval(start=start, end=end).covers(key):
                 self._setitem_subset_of_existing(i, key, value)
                 return
 
         for i, (start, end) in enumerate(zip(self.interval_starts, self.interval_ends)):
             if (
-                key.intersects(oir.Interval(start=start, end=end))
+                key.intersects(oir.UnboundedInterval(start=start, end=end))
                 or start == key.end
                 or end == key.start
             ):
@@ -756,8 +768,9 @@ class IntervalMapping:
             raise TypeError("Only OIR intervals supported for keys of IntervalMapping.")
 
         res = []
+        key = oir.UnboundedInterval(start=key.start, end=key.end)
         for start, end, value in zip(self.interval_starts, self.interval_ends, self.values):
-            if key.intersects(oir.Interval(start=start, end=end)):
+            if key.intersects(oir.UnboundedInterval(start=start, end=end)):
                 res.append(value)
         return res
 
