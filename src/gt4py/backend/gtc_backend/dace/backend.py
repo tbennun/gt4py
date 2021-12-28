@@ -18,8 +18,8 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 
 import dace
 import numpy as np
+from dace.sdfg.utils import fuse_states, inline_sdfgs
 from dace.transformation import strict_transformations
-from dace.sdfg.utils import inline_sdfgs, fuse_states
 from dace.transformation.dataflow import MapCollapse
 
 import gt4py.definitions
@@ -39,7 +39,7 @@ from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
 from gtc import gtir, gtir_to_oir
-from gtc.common import LevelMarker, CartesianOffset
+from gtc.common import CartesianOffset, LevelMarker
 from gtc.dace.nodes import HorizontalExecutionLibraryNode, VerticalLoopLibraryNode
 from gtc.dace.oir_to_dace import OirSDFGBuilder
 from gtc.dace.utils import array_dimensions, replace_strides
@@ -93,11 +93,11 @@ def to_device(sdfg: dace.SDFG, device):
                     for node, _ in section.all_nodes_recursive():
                         if isinstance(node, HorizontalExecutionLibraryNode):
                             node.map_schedule = dace.ScheduleType.GPU_ThreadBlock
-    # else:
-    #     for node, _ in sdfg.all_nodes_recursive():
-    #         if isinstance(node, VerticalLoopLibraryNode):
-    #             node.implementation = "block"
-    #             node.tile_sizes = [2, 2]
+    else:
+        for node, _ in sdfg.all_nodes_recursive():
+            if isinstance(node, VerticalLoopLibraryNode):
+                node.implementation = "block"
+                node.tile_sizes = [8, 8]
 
 
 def expand_and_wrap_sdfg(

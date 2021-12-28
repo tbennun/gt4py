@@ -695,14 +695,14 @@ class TestNon3DFields(gt_testing.StencilTestSuite):
 
         field_out[:, :, :, 1, 0] = (
             field_in[:]
-            + another_field[1:, 1:, None, 0, 0, 0]
-            + another_field[1:, 1:, None, 0, 0, 1]
+            + another_field[2:, 2:, None, 0, 0, 0]
+            + another_field[2:, 2:, None, 0, 0, 1]
         )
         field_out[:, :, :, 1, 1] = 3 * (
-            another_field[1:, 1:, None, 1, 0, 0]
-            + another_field[1:, 1:, None, 1, 0, 1]
-            + another_field[1:, 1:, None, 1, 1, 0]
-            + another_field[1:, 1:, None, 1, 1, 1]
+            another_field[2:, 2:, None, 1, 0, 0]
+            + another_field[2:, 2:, None, 1, 0, 1]
+            + another_field[2:, 2:, None, 1, 1, 0]
+            + another_field[2:, 2:, None, 1, 1, 1]
         )
 
         field_out[:, :, :, 2, 0] = (
