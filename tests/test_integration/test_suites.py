@@ -641,7 +641,7 @@ class TestNon3DFields(gt_testing.StencilTestSuite):
             in_range=(-10, 10), axes="K", boundary=[(0, 0), (0, 0), (0, 0)]
         ),
         "another_field": gt_testing.field(
-            in_range=(-10, 10), axes="IJ", data_dims=(3, 2, 2), boundary=[(0, 1), (0, 1), (0, 0)]
+            in_range=(-10, 10), axes="IJ", data_dims=(3, 2, 2), boundary=[(1, 1), (1, 1), (0, 0)]
         ),
         "field_out": gt_testing.field(
             in_range=(-10, 10), axes="IJK", data_dims=(3, 2), boundary=[(0, 0), (0, 0), (0, 0)]
@@ -1911,9 +1911,7 @@ def test_test():
             "i_end": AxisIndex(axis=gtscript.I, index=-1, offset=-1),
         },
     )
-    def compute_x_flux(
-            q: FloatField, courant: FloatField, dxa: FloatFieldIJ, xflux: FloatField
-    ):
+    def compute_x_flux(q: FloatField, courant: FloatField, dxa: FloatFieldIJ, xflux: FloatField):
         from __externals__ import mord
 
         with computation(PARALLEL), interval(...):
@@ -1923,4 +1921,3 @@ def test_test():
             else:
                 bl, br = compute_blbr_ord8plus(q, dxa)
                 xflux = get_flux_ord8plus(q, courant, bl, br)
-

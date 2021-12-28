@@ -17,7 +17,8 @@
 import base64
 import pickle
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Union
 
 import dace.data
 import dace.properties
@@ -25,7 +26,8 @@ import dace.subsets
 import networkx as nx
 from dace import library
 
-from gtc.common import DataType, LoopOrder, typestr_to_data_type
+from gtc import oir
+from gtc.common import DataType, LoopOrder, VariableKOffset, typestr_to_data_type
 from gtc.dace.utils import (
     CartesianIterationSpace,
     OIRFieldRenamer,
@@ -34,7 +36,6 @@ from gtc.dace.utils import (
     get_node_name_mapping,
 )
 from gtc.oir import CacheDesc, HorizontalExecution, Interval, VerticalLoop, VerticalLoopSection
-from gtc.common import VariableKOffset
 
 
 class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
@@ -177,14 +178,18 @@ class VerticalLoopLibraryNode(OIRLibraryNode):
     #     return super(OIRLibraryNode, self).__hash__()
 
 
+@dataclass
+class PreliminaryHorizontalExecution:
+    body: List[oir.Stmt]
+    declarations: List[oir.LocalScalar]
+
+
 @library.node
 class HorizontalExecutionLibraryNode(OIRLibraryNode):
     implementations: Dict[str, dace.library.ExpandTransformation] = {}
     default_implementation = "naive"
 
-    oir_node = dace.properties.DataclassProperty(
-        dtype=HorizontalExecution, default=None, allow_none=True
-    )
+    _oir_node: Union[HorizontalExecution, PreliminaryHorizontalExecution] = None
     iteration_space = dace.properties.Property(
         dtype=CartesianIterationSpace, default=None, allow_none=True
     )
@@ -207,12 +212,22 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
     ):
         if oir_node is not None:
             name = "HorizontalExecution_" + str(id(oir_node))
-            self.oir_node = oir_node
+            self._oir_node = oir_node
             self.iteration_space = iteration_space
 
         super().__init__(name=name, *args, **kwargs)
 
+    @property
+    def oir_node(self):
+        return self._oir_node
+
+    def commit_horizontal_execution(self):
+        self._oir_node = HorizontalExecution(
+            body=self._oir_node.body, declarations=self._oir_node.declarations
+        )
+
     def as_oir(self):
+        self.commit_horizontal_execution()
         return self.oir_node
 
     def validate(self, parent_sdfg: dace.SDFG, parent_state: dace.SDFGState, *args, **kwargs):

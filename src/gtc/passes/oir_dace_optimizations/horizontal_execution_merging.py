@@ -35,7 +35,7 @@ from dace.sdfg.utils import node_path_graph
 from dace.transformation.transformation import PatternNode, Transformation
 
 from gtc import oir
-from gtc.dace.nodes import HorizontalExecutionLibraryNode
+from gtc.dace.nodes import HorizontalExecutionLibraryNode, PreliminaryHorizontalExecution
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
 from .api import optimize_horizontal_executions
@@ -198,9 +198,15 @@ class GraphMerging(Transformation):
         if expr_index >= 2:
             if nx.has_path(graph.nx, right, left):
                 return False
-        intermediate_accesses = set(
-            n for path in nx.all_simple_paths(graph.nx, left, right) for n in path[1:-1]
-        )
+        intermediate_accesses = nx.algorithms.dag.descendants(
+            graph.nx, left
+        ) & nx.algorithms.dag.ancestors(graph.nx, right)
+        intermediate_accesses = {
+            node for node in intermediate_accesses if node is not left and node is not right
+        }
+
+        if not all(isinstance(node, dace.nodes.AccessNode) for node in intermediate_accesses):
+            return False
         if not all(
             isinstance(n, dace.nodes.AccessNode)
             and (graph.edges_between(left, n) and graph.edges_between(n, right))
@@ -238,9 +244,12 @@ class GraphMerging(Transformation):
         )
         state.add_node(res)
 
-        intermediate_accesses = set(
-            n for path in nx.all_simple_paths(state.nx, left, right) for n in path[1:-1]
-        )
+        intermediate_accesses = nx.algorithms.dag.descendants(
+            state.nx, left
+        ) & nx.algorithms.dag.ancestors(state.nx, right)
+        intermediate_accesses = {
+            node for node in intermediate_accesses if node is not left and node is not right
+        }
 
         # rewire edges and connectors to left and delete right
         for edge in state.edges_between(left, right):
