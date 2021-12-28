@@ -115,11 +115,8 @@ def expand_and_wrap_sdfg(
     for array in inner_sdfg.arrays.values():
         if array.transient:
             array.lifetime = dace.AllocationLifetime.Persistent
-    # inner_sdfg = dace.SDFG.from_json(inner_sdfg.to_json())
     inner_sdfg.expand_library_nodes(recursive=True)
     post_expand_trafos(inner_sdfg)
-
-    extents = compute_legacy_extents(gtir, allow_negative=True)
 
     inputs = {
         name

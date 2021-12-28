@@ -483,8 +483,8 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
                     if name not in section_origins:
                         section_origins[name] = origin
                     section_origins[name] = (
-                        max(section_origins[name][0], origin[0]),
-                        max(section_origins[name][1], origin[1]),
+                        max(0, section_origins[name][0], origin[0]),
+                        max(0, section_origins[name][1], origin[1]),
                     )
 
                     min_k_offsets.setdefault(name, off[2] or 0)
@@ -503,14 +503,14 @@ class NaiveVerticalLoopExpander(OIRLibraryNodeExpander):
             if dimensions[0]:
                 subset_strs.append(
                     "{i:+d}:{i:+d}+({I})".format(
-                        i=vl_origin[0] - section_origin[0],
+                        i=max(0, vl_origin[0]) - section_origin[0],
                         I=shape[next(idx)],
                     )
                 )
             if dimensions[1]:
                 subset_strs.append(
                     "{j:+d}:{j:+d}+({J})".format(
-                        j=vl_origin[1] - section_origin[1], J=shape[next(idx)]
+                        j=max(0, vl_origin[1]) - section_origin[1], J=shape[next(idx)]
                     )
                 )
             if dimensions[2]:
