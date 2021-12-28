@@ -17,7 +17,8 @@
 import base64
 import pickle
 from abc import ABC, abstractmethod
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Union
 
 import dace.data
 import dace.properties
@@ -25,7 +26,8 @@ import dace.subsets
 import networkx as nx
 from dace import library
 
-from gtc.common import DataType, LoopOrder, typestr_to_data_type
+from gtc import oir
+from gtc.common import DataType, LoopOrder, VariableKOffset, typestr_to_data_type
 from gtc.dace.utils import (
     CartesianIterationSpace,
     OIRFieldRenamer,
@@ -41,9 +43,9 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
     def as_oir(self):
         raise NotImplementedError("Implement in child class.")
 
-    @abstractmethod
-    def __eq__(self, other):
-        raise NotImplementedError("Implement in child class.")
+    # @abstractmethod
+    # def __eq__(self, other):
+    #     raise NotImplementedError("Implement in child class.")
 
     def to_json(self, parent):
         protocol = pickle.DEFAULT_PROTOCOL
@@ -159,21 +161,27 @@ class VerticalLoopLibraryNode(OIRLibraryNode):
             caches=self.caches,
         )
 
-    def __eq__(self, other) -> bool:
-        if (
-            not isinstance(other, VerticalLoopLibraryNode)
-            or self.loop_order != other.loop_order
-            or self.caches != other.caches
-            or len(self.sections) != len(other.sections)
-        ):
-            return False
-        for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
-            if interval1 != interval2 or not assert_sdfg_equal(he_sdfg1, he_sdfg2):
-                return False
-        return True
+    # def __eq__(self, other):
+    #     try:
+    #         assert isinstance(other, VerticalLoopLibraryNode)
+    #         assert self.loop_order == other.loop_order
+    #         assert self.caches == other.caches
+    #         assert len(self.sections) == len(other.sections)
+    #         for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
+    #             assert interval1 == interval2
+    #             assert_sdfg_equal(he_sdfg1, he_sdfg2)
+    #     except AssertionError:
+    #         return False
+    #     return True
+    #
+    # def __hash__(self):
+    #     return super(OIRLibraryNode, self).__hash__()
 
-    def __hash__(self):
-        return super(OIRLibraryNode, self).__hash__()
+
+@dataclass
+class PreliminaryHorizontalExecution:
+    body: List[oir.Stmt]
+    declarations: List[oir.LocalScalar]
 
 
 @library.node
@@ -181,9 +189,7 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
     implementations: Dict[str, dace.library.ExpandTransformation] = {}
     default_implementation = "naive"
 
-    oir_node = dace.properties.DataclassProperty(
-        dtype=HorizontalExecution, default=None, allow_none=True
-    )
+    _oir_node: Union[HorizontalExecution, PreliminaryHorizontalExecution] = None
     iteration_space = dace.properties.Property(
         dtype=CartesianIterationSpace, default=None, allow_none=True
     )
@@ -206,21 +212,38 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
     ):
         if oir_node is not None:
             name = "HorizontalExecution_" + str(id(oir_node))
-            self.oir_node = oir_node
+            self._oir_node = oir_node
             self.iteration_space = iteration_space
 
         super().__init__(name=name, *args, **kwargs)
 
+    @property
+    def oir_node(self):
+        return self._oir_node
+
+    def commit_horizontal_execution(self):
+        self._oir_node = HorizontalExecution(
+            body=self._oir_node.body, declarations=self._oir_node.declarations
+        )
+
     def as_oir(self):
+        self.commit_horizontal_execution()
         return self.oir_node
 
     def validate(self, parent_sdfg: dace.SDFG, parent_state: dace.SDFGState, *args, **kwargs):
         get_node_name_mapping(parent_state, self)
 
-    def __eq__(self, other):
-        if not isinstance(other, HorizontalExecutionLibraryNode):
-            return False
-        return self.as_oir() == other.as_oir()
+    # def __eq__(self, other):
+    #     if not isinstance(other, HorizontalExecutionLibraryNode):
+    #         return False
+    #     return self.as_oir() == other.as_oir()
+    #
+    # def __hash__(self):
+    #     return super(OIRLibraryNode, self).__hash__()
 
-    def __hash__(self):
-        return super(OIRLibraryNode, self).__hash__()
+    @property
+    def free_symbols(self):
+        res = super().free_symbols
+        if len(self.oir_node.iter_tree().if_isinstance(VariableKOffset).to_list()) > 0:
+            res.add("k")
+        return res

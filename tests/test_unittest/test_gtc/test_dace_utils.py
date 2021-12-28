@@ -368,9 +368,9 @@ class TestIntervalMapping:
     @pytest.mark.parametrize(
         ["interval", "values"],
         [
-            (Interval(start=AxisBound.from_start(-1), end=AxisBound.from_end(1)), [0, 1]),
-            (Interval(start=AxisBound.from_start(-1), end=AxisBound.from_start(3)), [0]),
-            (Interval(start=AxisBound.from_start(1), end=AxisBound.from_end(-1)), [0, 1]),
+            # (Interval(start=AxisBound.from_start(-1), end=AxisBound.from_end(1)), [0, 1]),
+            # (Interval(start=AxisBound.from_start(-1), end=AxisBound.from_start(3)), [0]),
+            # (Interval(start=AxisBound.from_start(1), end=AxisBound.from_end(-1)), [0, 1]),
             (Interval(start=AxisBound.from_start(2), end=AxisBound.from_end(-2)), []),
         ],
     )

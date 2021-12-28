@@ -18,7 +18,9 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 
 import dace
 import numpy as np
+from dace.sdfg.utils import fuse_states, inline_sdfgs
 from dace.serialize import dumps
+from dace.transformation import strict_transformations
 from dace.transformation.dataflow import MapCollapse
 
 import gt4py.definitions
@@ -38,7 +40,7 @@ from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
 from gtc import gtir, gtir_to_oir
-from gtc.common import LevelMarker
+from gtc.common import CartesianOffset, LevelMarker
 from gtc.dace.nodes import HorizontalExecutionLibraryNode, VerticalLoopLibraryNode
 from gtc.dace.oir_to_dace import OirSDFGBuilder
 from gtc.dace.utils import array_dimensions, replace_strides
@@ -46,6 +48,7 @@ from gtc.passes.gtir_legacy_extents import compute_legacy_extents
 from gtc.passes.gtir_pipeline import GtirPipeline
 from gtc.passes.oir_optimizations.caches import FillFlushToLocalKCaches
 from gtc.passes.oir_optimizations.horizontal_execution_merging import GreedyMerging
+from gtc.passes.oir_optimizations.inlining import MaskInlining
 from gtc.passes.oir_pipeline import DefaultPipeline
 
 
@@ -53,7 +56,25 @@ if TYPE_CHECKING:
     from gt4py.stencil_object import StencilObject
 
 
-def post_expand_trafos(sdfg: dace.SDFG):
+def post_expand_trafos(sdfg: dace.SDFG, layout_map):
+    while inline_sdfgs(sdfg) or fuse_states(sdfg):
+        pass
+    sdfg.apply_strict_transformations()
+
+    repldict = replace_strides(
+        [array for array in sdfg.arrays.values() if array.transient],
+        layout_map,
+    )
+    sdfg.replace_dict(repldict)
+    for state in sdfg.nodes():
+        for node in state.nodes():
+            if isinstance(node, dace.nodes.NestedSDFG):
+                for k, v in repldict.items():
+                    if k in node.symbol_mapping:
+                        node.symbol_mapping[k] = v
+    for k in repldict.keys():
+        if k in sdfg.symbols:
+            sdfg.remove_symbol(k)
 
     sdfg.apply_strict_transformations()
     state = sdfg.node(0)
@@ -94,89 +115,28 @@ def to_device(sdfg: dace.SDFG, device):
         for node, _ in sdfg.all_nodes_recursive():
             if isinstance(node, VerticalLoopLibraryNode):
                 node.implementation = "block"
-                node.tile_sizes = [2, 2]
+                node.tile_sizes = [8, 8]
 
 
 def expand_and_wrap_sdfg(
-    gtir: gtir.Stencil, inner_sdfg: dace.SDFG, layout_map
+    gtir: gtir.Stencil, sdfg: dace.SDFG, layout_map
 ) -> dace.SDFG:  # noqa: C901
-    wrapper_sdfg = dace.SDFG(gtir.name)
-    wrapper_state = wrapper_sdfg.add_state(gtir.name)
 
     args_data = make_args_data_from_gtir(GtirPipeline(gtir))
 
     # stencils without effect
     if all(info is None for info in args_data.field_info.values()):
-        return wrapper_sdfg
+        sdfg = dace.SDFG(gtir.name)
+        sdfg = sdfg.add_state(gtir.name)
+        return sdfg
 
-    for array in inner_sdfg.arrays.values():
+    for array in sdfg.arrays.values():
         if array.transient:
             array.lifetime = dace.AllocationLifetime.Persistent
+    sdfg.expand_library_nodes(recursive=True)
+    post_expand_trafos(sdfg, layout_map=layout_map)
 
-    inner_sdfg = dace.SDFG.from_json(inner_sdfg.to_json())
-    inner_sdfg.expand_library_nodes(recursive=True)
-    post_expand_trafos(inner_sdfg)
-
-    inputs = {
-        name
-        for name, info in args_data.field_info.items()
-        if info is not None and info.access != gt4py.definitions.AccessKind.WRITE
-    }
-    outputs = {
-        name
-        for name, info in args_data.field_info.items()
-        if info is not None and info.access != gt4py.definitions.AccessKind.READ
-    }
-
-    nsdfg = wrapper_state.add_nested_sdfg(inner_sdfg, None, inputs=inputs, outputs=outputs)
-
-    subset_strs = {}
-
-    for name, info in args_data.field_info.items():
-        if info is None:
-            continue
-        shape = inner_sdfg.arrays[name].shape
-        wrapper_sdfg.add_array(
-            name,
-            strides=inner_sdfg.arrays[name].strides,
-            shape=shape,
-            dtype=inner_sdfg.arrays[name].dtype,
-            storage=inner_sdfg.arrays[name].storage,
-        )
-
-        subset_strs[name] = ",".join(f"0:{s}" for s in inner_sdfg.arrays[name].shape)
-    for name in inputs:
-        wrapper_state.add_edge(
-            wrapper_state.add_read(name),
-            None,
-            nsdfg,
-            name,
-            dace.Memlet.simple(name, subset_str=subset_strs[name]),
-        )
-    for name in outputs:
-        wrapper_state.add_edge(
-            nsdfg,
-            name,
-            wrapper_state.add_write(name),
-            None,
-            dace.Memlet.simple(name, subset_str=subset_strs[name]),
-        )
-    symbol_mapping = {sym: sym for sym in inner_sdfg.symbols.keys()}
-    symbol_mapping.update(
-        **replace_strides(
-            [array for array in inner_sdfg.arrays.values() if array.transient],
-            layout_map,
-        )
-    )
-
-    for old, new in symbol_mapping.items():
-        wrapper_sdfg.replace(old, new)
-
-    for name, info in args_data.parameter_info.items():
-        if info is not None and name not in wrapper_sdfg.symbols:
-            wrapper_sdfg.add_symbol(name, nsdfg.sdfg.symbols[name])
-
-    return wrapper_sdfg
+    return sdfg
 
 
 class GTCDaCeExtGenerator:
@@ -190,7 +150,13 @@ class GTCDaCeExtGenerator:
         base_oir = gtir_to_oir.GTIRToOIR().visit(gtir)
         oir_pipeline = self.backend.builder.options.backend_opts.get(
             "oir_pipeline",
-            DefaultPipeline(skip=[GreedyMerging, FillFlushToLocalKCaches]),
+            DefaultPipeline(
+                skip=[
+                    GreedyMerging,
+                    MaskInlining,
+                    FillFlushToLocalKCaches,
+                ]
+            ),
         )
         oir = oir_pipeline.run(base_oir)
         sdfg = OirSDFGBuilder().visit(oir)
@@ -290,8 +256,11 @@ class KOriginsVisitor(NodeVisitor):
         self, node: gtir.FieldAccess, *, k_origins, interval: gtir.Interval
     ) -> None:
         if interval.start.level == LevelMarker.START:
-            k_offset = node.offset.k if isinstance(node.offset.k, int) else 0
-            candidate = max(0, -interval.start.offset - k_offset)
+            if not isinstance(node.offset, CartesianOffset):
+                candidate = 0
+            else:
+                candidate = -interval.start.offset - node.offset.k
+            candidate = max(0, candidate)
         else:
             candidate = 0
         k_origins[node.name] = max(k_origins.get(node.name, 0), candidate)
@@ -335,7 +304,6 @@ class DaCeComputationCodegen:
     @classmethod
     def apply(cls, gtir, sdfg: dace.SDFG):
         self = cls()
-
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")

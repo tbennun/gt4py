@@ -20,6 +20,7 @@ from dace.transformation.transformation import Transformation
 
 from gtc import oir
 from gtc.dace import dace_to_oir
+from gtc.dace.nodes import HorizontalExecutionLibraryNode
 from gtc.dace.oir_to_dace import OirSDFGBuilder
 from gtc.dace.utils import iter_vertical_loop_section_sub_sdfgs
 
@@ -42,4 +43,7 @@ def optimize_horizontal_executions(
         subgraph.apply_transformations_repeated(
             transformation, validate=False, options=dict(api_fields=api_fields)
         )
+        for node, _ in subgraph.all_nodes_recursive():
+            if isinstance(node, HorizontalExecutionLibraryNode):
+                node.commit_horizontal_execution()
     return dace_to_oir.convert(sdfg)
