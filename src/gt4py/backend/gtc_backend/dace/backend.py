@@ -20,7 +20,6 @@ import dace
 import numpy as np
 from dace.sdfg.utils import fuse_states, inline_sdfgs
 from dace.serialize import dumps
-from dace.transformation import strict_transformations
 from dace.transformation.dataflow import MapCollapse
 
 import gt4py.definitions
@@ -56,11 +55,7 @@ if TYPE_CHECKING:
     from gt4py.stencil_object import StencilObject
 
 
-def post_expand_trafos(sdfg: dace.SDFG, layout_map):
-    while inline_sdfgs(sdfg) or fuse_states(sdfg):
-        pass
-    sdfg.apply_strict_transformations()
-
+def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
     repldict = replace_strides(
         [array for array in sdfg.arrays.values() if array.transient],
         layout_map,
@@ -76,7 +71,11 @@ def post_expand_trafos(sdfg: dace.SDFG, layout_map):
         if k in sdfg.symbols:
             sdfg.remove_symbol(k)
 
-    sdfg.apply_strict_transformations()
+
+def post_expand_trafos(sdfg: dace.SDFG):
+    while inline_sdfgs(sdfg) or fuse_states(sdfg):
+        pass
+    sdfg.coarsen_dataflow()
     state = sdfg.node(0)
     sdict = state.scope_children()
     for mapnode in sdict[None]:
@@ -134,7 +133,8 @@ def expand_and_wrap_sdfg(
         if array.transient:
             array.lifetime = dace.AllocationLifetime.Persistent
     sdfg.expand_library_nodes(recursive=True)
-    post_expand_trafos(sdfg, layout_map=layout_map)
+    specialize_transient_strides(sdfg, layout_map=layout_map)
+    post_expand_trafos(sdfg)
 
     return sdfg
 

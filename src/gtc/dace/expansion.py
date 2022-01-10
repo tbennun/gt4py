@@ -41,20 +41,11 @@ from gtc.oir import Interval
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
 
-def _get_offset_subset_str(
-    origin, offset, nonflat_dimensions, context_dimensions=None, symbols="ij0"
-):
-    if context_dimensions is None:
-        context_dimensions = nonflat_dimensions
+def _get_offset_subset_str(origin, offset, nonflat_dimensions, symbols="ij0"):
     subset_strs = []
     for dim, var in enumerate(symbols):
-        if not context_dimensions[dim]:
-            continue
-        else:
-            if nonflat_dimensions[dim]:
-                subset_strs.append(f"({var})+({origin[dim]})+({offset[dim]})")
-            elif any(d for d in nonflat_dimensions):
-                subset_strs.append("0")
+        if nonflat_dimensions[dim]:
+            subset_strs.append(f"({var})+({origin[dim]})+({offset[dim]})")
 
     return subset_strs
 
@@ -135,7 +126,6 @@ class TaskletCodegen(codegen.TemplatedGenerator):
                 offset_strs += _get_offset_subset_str(
                     origins[node.name],
                     offset,
-                    context_dimensions=context_dimensions[node.name],
                     nonflat_dimensions=nonflat_dimensions[acc_name],
                     symbols=idx_syms,
                 )
