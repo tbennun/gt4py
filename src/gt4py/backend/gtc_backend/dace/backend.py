@@ -87,7 +87,11 @@ def post_expand_trafos(sdfg: dace.SDFG):
         inner_map = inner_maps[0]
         if "k" in inner_map.params:
             res_entry, _ = MapCollapse.apply_to(
-                sdfg, _outer_map_entry=mapnode, _inner_map_entry=inner_map, save=False
+                sdfg,
+                _outer_map_entry=mapnode,
+                _inner_map_entry=inner_map,
+                save=False,
+                permissive=True,
             )
             res_entry.schedule = mapnode.schedule
 

@@ -236,7 +236,7 @@ class FrozenStencil(SDFGConvertible):
         return wrapper_sdfg
 
     def _assert_dace_backend(self):
-        if not hasattr(self.stencil_object, "sdfg"):
+        if not hasattr(self.stencil_object, "_sdfg"):
             raise TypeError(
                 f"Only dace backends are supported in DaCe-orchestrated programs."
                 f' (found "{self.stencil_object.backend}")'
