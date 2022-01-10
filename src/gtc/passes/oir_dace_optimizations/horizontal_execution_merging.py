@@ -191,7 +191,7 @@ class GraphMerging(Transformation):
         candidate: Dict[str, dace.nodes.Node],
         expr_index: int,
         sdfg: dace.SDFG,
-        strict: bool = False,
+        permissive: bool = True,
     ) -> bool:
         left = self.left(sdfg)
         right = self.right(sdfg)

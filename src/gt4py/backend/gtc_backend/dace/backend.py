@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Dict, Optional, Tuple, Type
 import dace
 import numpy as np
 from dace.sdfg.utils import fuse_states, inline_sdfgs
-from dace.transformation import strict_transformations
 from dace.transformation.dataflow import MapCollapse
 
 import gt4py.definitions
@@ -58,7 +57,7 @@ if TYPE_CHECKING:
 def post_expand_trafos(sdfg: dace.SDFG, layout_map):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
-    sdfg.apply_strict_transformations()
+    sdfg.coarsen_dataflow()
 
     repldict = replace_strides(
         [array for array in sdfg.arrays.values() if array.transient],
@@ -75,7 +74,7 @@ def post_expand_trafos(sdfg: dace.SDFG, layout_map):
         if k in sdfg.symbols:
             sdfg.remove_symbol(k)
 
-    sdfg.apply_strict_transformations()
+    sdfg.coarsen_dataflow()
     state = sdfg.node(0)
     sdict = state.scope_children()
     for mapnode in sdict[None]:
