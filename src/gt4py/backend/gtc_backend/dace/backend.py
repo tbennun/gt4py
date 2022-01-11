@@ -33,7 +33,6 @@ from gt4py.backend.gt_backends import (
     cuda_is_compatible_layout,
     cuda_is_compatible_type,
     make_cuda_layout_map,
-    make_x86_layout_map,
 )
 from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to_sid
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
@@ -94,6 +93,9 @@ def post_expand_trafos(sdfg: dace.SDFG):
                 permissive=True,
             )
             res_entry.schedule = mapnode.schedule
+    for node, _ in sdfg.all_nodes_recursive():
+        if isinstance(node, dace.nodes.MapEntry):
+            node.collapse = len(node.range)
 
 
 def to_device(sdfg: dace.SDFG, device):
@@ -118,6 +120,8 @@ def to_device(sdfg: dace.SDFG, device):
         for node, _ in sdfg.all_nodes_recursive():
             if isinstance(node, VerticalLoopLibraryNode):
                 node.implementation = "block"
+                node.map_schedule = dace.ScheduleType.Sequential
+                node.tiling_map_schedule = dace.ScheduleType.CPU_Multicore
                 node.tile_sizes = [8, 8]
 
 
@@ -182,7 +186,9 @@ class GTCDaCeExtGenerator:
 
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
             with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
-                implementation = self._post_process_code(DaCeComputationCodegen.apply(gtir, sdfg))
+                implementation = DaCeComputationCodegen.apply(
+                    gtir, sdfg, self.backend.storage_info["layout_map"]
+                )
 
             bindings = DaCeBindingsCodegen.apply(
                 gtir, sdfg, module_name=self.module_name, backend=self.backend
@@ -192,7 +198,8 @@ class GTCDaCeExtGenerator:
             computation = {"computation.hpp": implementation}
             bindings = {"bindings" + bindings_ext: bindings}
         else:
-            computation = bindings = {}
+            computation = dict()
+            bindings = dict()
 
         return {
             "computation": computation,
@@ -306,7 +313,7 @@ class DaCeComputationCodegen:
         ]
 
     @classmethod
-    def apply(cls, gtir, sdfg: dace.SDFG):
+    def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
         self = cls()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
@@ -345,7 +352,7 @@ class DaCeComputationCodegen:
 
         interface = cls.template.definition.render(
             name=sdfg.name,
-            dace_args=self.generate_dace_args(gtir, sdfg),
+            dace_args=self.generate_dace_args(gtir, sdfg, make_layout),
             functor_args=self.generate_functor_args(sdfg),
             tmp_allocs=self.generate_tmp_allocs(sdfg),
             allocator="gt::cuda_util::cuda_malloc" if is_gpu else "std::make_unique",
@@ -365,7 +372,7 @@ class DaCeComputationCodegen:
     def __init__(self):
         self._unique_index = 0
 
-    def generate_dace_args(self, gtir, sdfg):
+    def generate_dace_args(self, gtir, sdfg, make_layout):
         offset_dict: Dict[str, Tuple[int, int, int]] = {
             k: (-v[0][0], -v[1][0], -v[2][0]) for k, v in compute_legacy_extents(gtir).items()
         }
@@ -376,7 +383,17 @@ class DaCeComputationCodegen:
         symbols = {f"__{var}": f"__{var}" for var in "IJK"}
         for name, array in sdfg.arrays.items():
             if array.transient:
-                continue
+                from gt4py.storage.utils import idx_from_order, strides_from_padded_shape
+
+                mask = array_dimensions(array)
+                layout_map = make_layout(mask)
+                order_idx = idx_from_order([i for i in layout_map if i is not None])
+                strides = strides_from_padded_shape(
+                    array.shape, order_idx, dace.symbolic.pystr_to_symbolic("1")
+                )
+                dim_gen = (d for i, d in enumerate("IJK") if mask[i] is not None)
+                for dim, stride in zip(dim_gen, strides):
+                    symbols[f"__{name}_{dim}_stride"] = str(stride)
             else:
                 dims = [dim for dim, select in zip("IJK", array_dimensions(array)) if select]
                 data_ndim = len(array.shape) - len(dims)
@@ -490,6 +507,7 @@ class DaCeBindingsCodegen:
                 domain_dim_flags=domain_dim_flags,
                 data_ndim=data_ndim,
                 stride_kind_index=self.unique_index(),
+                check_layout=False,
                 backend=self.backend,
             )
 
@@ -578,6 +596,26 @@ class BaseGTCDaceBackend(BaseGTBackend, CLIBackendMixin):
         )
 
 
+def layout_maker_factory(base_layout):
+    def layout_maker(mask):
+        ranks = []
+        for m, l in zip(mask, base_layout):
+            if m:
+                ranks.append(l)
+        if len(mask) > 3:
+            if base_layout[2] == 2:
+                ranks.extend(3 + c for c in range(len(mask) - 3))
+            else:
+                ranks.extend(-c for c in range(len(mask) - 3))
+
+        res_layout = [0] * len(ranks)
+        for i, idx in enumerate(np.argsort(ranks)):
+            res_layout[idx] = i
+        return tuple(res_layout)
+
+    return layout_maker
+
+
 @gt_backend.register
 class GTCDaceBackend(BaseGTCDaceBackend):
     """DaCe python backend using gtc."""
@@ -588,11 +626,10 @@ class GTCDaceBackend(BaseGTCDaceBackend):
     storage_info = {
         "alignment": 1,
         "device": "cpu",
-        "layout_map": make_x86_layout_map,
+        "layout_map": layout_maker_factory((1, 0, 2)),
         "is_compatible_layout": lambda x: True,
         "is_compatible_type": lambda x: isinstance(x, np.ndarray),
     }
-
     MODULE_GENERATOR_CLASS = DaCePyExtModuleGenerator
 
     options = BaseGTBackend.GT_BACKEND_OPTS
@@ -611,7 +648,7 @@ class GTCDaceGPUBackend(BaseGTCDaceBackend):
         "alignment": 32,
         "device": "gpu",
         "layout_map": make_cuda_layout_map,
-        "is_compatible_layout": cuda_is_compatible_layout,
+        "is_compatible_layout": lambda x: True,
         "is_compatible_type": cuda_is_compatible_type,
     }
     options = {**BaseGTBackend.GT_BACKEND_OPTS, "device_sync": {"versioning": True, "type": bool}}
