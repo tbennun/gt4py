@@ -807,7 +807,7 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
             # in the GTC backend, `ir` is the definition_ir
             ir = self.builder.implementation_ir
         # Generate source
-        if not self.builder.options._impl_opts.get("disable-code-generation", False):
+        if not self.builder.options._impl_opts.get("disable_code_generation", False):
             gt_pyext_files: Dict[str, Any] = self.make_extension_sources(ir=ir)
             gt_pyext_sources = {**gt_pyext_files["computation"], **gt_pyext_files["bindings"]}
         else:
@@ -845,6 +845,8 @@ class BaseGTBackend(gt_backend.BasePyExtBackend, gt_backend.CLIBackendMixin):
         pyext_build_path = pathlib.Path(
             os.path.relpath(self.pyext_build_dir_path, pathlib.Path.cwd())
         )
+        pyext_build_path.mkdir(parents=True, exist_ok=True)
+
         for filename, content in gt_pyext_files.get("info", {}).items():
             with open(pyext_build_path / filename, "w") as handle:
                 handle.write(content)

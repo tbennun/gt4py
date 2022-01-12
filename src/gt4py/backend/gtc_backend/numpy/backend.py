@@ -128,7 +128,7 @@ class GTCNumpyBackend(BaseBackend, CLIBackendMixin):
     def generate(self) -> Type["StencilObject"]:
         self.check_options(self.builder.options)
         src_dir = self.builder.module_path.parent
-        if not self.builder.options._impl_opts.get("disable-code-generation", False):
+        if not self.builder.options._impl_opts.get("disable_code_generation", False):
             src_dir.mkdir(parents=True, exist_ok=True)
             recursive_write(src_dir, self.generate_computation())
         return self.make_module()
