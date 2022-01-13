@@ -74,7 +74,7 @@ def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
 def post_expand_trafos(sdfg: dace.SDFG):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
-    sdfg.simplify()
+    sdfg.coarsen_dataflow()
     state = sdfg.node(0)
     sdict = state.scope_children()
     for mapnode in sdict[None]:
@@ -87,8 +87,8 @@ def post_expand_trafos(sdfg: dace.SDFG):
         if "k" in inner_map.params:
             res_entry, _ = MapCollapse.apply_to(
                 sdfg,
-                outer_map_entry=mapnode,
-                inner_map_entry=inner_map,
+                _outer_map_entry=mapnode,
+                _inner_map_entry=inner_map,
                 save=False,
                 permissive=True,
             )

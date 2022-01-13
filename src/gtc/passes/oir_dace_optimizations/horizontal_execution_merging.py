@@ -29,10 +29,10 @@ import dace
 import dace.subsets
 import networkx as nx
 from dace import SDFGState
-from dace.properties import SetProperty, make_properties
+from dace.properties import Property, make_properties
 from dace.sdfg import graph
 from dace.sdfg.utils import node_path_graph
-from dace.transformation.transformation import PatternNode, SingleStateTransformation
+from dace.transformation.transformation import PatternNode, Transformation
 
 from gtc import oir
 from gtc.dace.nodes import HorizontalExecutionLibraryNode, PreliminaryHorizontalExecution
@@ -163,11 +163,12 @@ def optional_node(pattern_node: PatternNode, sdfg: dace.SDFG) -> Optional[dace.n
     return node
 
 
+@dace.registry.autoregister_params(singlestate=True)
 @make_properties
-class GraphMerging(SingleStateTransformation):
+class GraphMerging(Transformation):
 
-    api_fields = SetProperty(
-        str,
+    api_fields = Property(
+        dtype=set,
         desc="Set of field names that are parameters to the parent stencil",
     )
 
@@ -187,12 +188,13 @@ class GraphMerging(SingleStateTransformation):
     def can_be_applied(
         self,
         graph: SDFGState,
+        candidate: Dict[str, dace.nodes.Node],
         expr_index: int,
         sdfg: dace.SDFG,
         permissive: bool = False,
     ) -> bool:
-        left = self.left
-        right = self.right
+        left = self.left(sdfg)
+        right = self.right(sdfg)
         if expr_index >= 2:
             if nx.has_path(graph.nx, right, left):
                 return False
@@ -227,10 +229,10 @@ class GraphMerging(SingleStateTransformation):
             left, right, self.api_fields
         )
 
-    def apply(self, state, sdfg: dace.SDFG) -> None:
+    def apply(self, sdfg: dace.SDFG) -> None:
         state = sdfg.node(self.state_id)
-        left = self.left
-        right = self.right
+        left = self.left(sdfg)
+        right = self.right(sdfg)
 
         # merge oir nodes
         res = HorizontalExecutionLibraryNode(
