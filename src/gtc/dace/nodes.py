@@ -211,7 +211,6 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
         **kwargs,
     ):
         if oir_node is not None:
-            name = "HorizontalExecution_" + str(id(oir_node))
             self._oir_node = oir_node
             self.iteration_space = iteration_space
 

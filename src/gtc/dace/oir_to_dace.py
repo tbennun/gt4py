@@ -54,6 +54,7 @@ class BaseOirSDFGBuilder(ABC):
     def __init__(self, name, stencil: Stencil, nodes):
         self._stencil = stencil
         self._sdfg = SDFG(name)
+        self._stencil_name = name
         self._state = self._sdfg.add_state(name + "_state")
         self._extents = nodes_extent_calculation(nodes)
 
@@ -742,25 +743,29 @@ class StencilOirSDFGBuilder(BaseOirSDFGBuilder):
 
 class OirSDFGBuilder(eve.NodeVisitor):
     def visit_HorizontalExecution(
-        self, node: oir.HorizontalExecution, *, iteration_spaces, **kwargs
+        self, node: oir.HorizontalExecution, *, stencil_name, iteration_spaces, **kwargs
     ):
         return HorizontalExecutionLibraryNode(
-            name=f"HorizontalExecution_{id(node)}",
+            name=f"{stencil_name}_HorizontalExecution_{id(node)}",
             oir_node=node,
             iteration_space=iteration_spaces[id(node)],
         )
 
-    def visit_VerticalLoopSection(self, node: oir.VerticalLoopSection, **kwargs):
-        library_nodes = [self.visit(he, **kwargs) for he in node.horizontal_executions]
+    def visit_VerticalLoopSection(self, node: oir.VerticalLoopSection, *, stencil_name, **kwargs):
+        library_nodes = [
+            self.visit(he, stencil_name=stencil_name, **kwargs) for he in node.horizontal_executions
+        ]
         sdfg = VerticalLoopSectionOirSDFGBuilder.build(
-            f"VerticalLoopSection_{id(node)}", kwargs["stencil"], library_nodes
+            f"{stencil_name}_VerticalLoopSection_{id(node)}", kwargs["stencil"], library_nodes
         )
         return node.interval, sdfg
 
-    def visit_VerticalLoop(self, node: oir.VerticalLoop, **kwargs):
-        sections = [self.visit(section, **kwargs) for section in node.sections]
+    def visit_VerticalLoop(self, node: oir.VerticalLoop, *, stencil_name, **kwargs):
+        sections = [
+            self.visit(section, stencil_name=stencil_name, **kwargs) for section in node.sections
+        ]
         return VerticalLoopLibraryNode(
-            name=f"VerticalLoop_{id(node)}",
+            name=f"{stencil_name}_VerticalLoop_{id(node)}",
             loop_order=node.loop_order,
             sections=sections,
             caches=node.caches,
@@ -769,7 +774,13 @@ class OirSDFGBuilder(eve.NodeVisitor):
     def visit_Stencil(self, node: oir.Stencil, **kwargs):
         iteration_spaces = oir_iteration_space_computation(node)
         library_nodes = [
-            self.visit(vl, stencil=node, iteration_spaces=iteration_spaces, **kwargs)
+            self.visit(
+                vl,
+                stencil=node,
+                stencil_name=node.name,
+                iteration_spaces=iteration_spaces,
+                **kwargs,
+            )
             for vl in node.vertical_loops
         ]
         return StencilOirSDFGBuilder.build(node.name, node, library_nodes)
