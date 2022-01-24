@@ -197,9 +197,9 @@ class FrozenStencil(SDFGConvertible):
                     or inner_sdfg.arrays[node.data].transient
                 ):
                     continue
-                if node.access != dace.dtypes.AccessType.WriteOnly:
+                if node.has_reads(inner_state):
                     inputs.add(node.data)
-                if node.access != dace.dtypes.AccessType.ReadOnly:
+                if node.has_writes(inner_state):
                     outputs.add(node.data)
 
         nsdfg = state.add_nested_sdfg(inner_sdfg, None, inputs, outputs)
