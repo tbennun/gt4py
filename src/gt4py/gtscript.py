@@ -617,10 +617,9 @@ class _FieldDescriptor:
         else:
             self.data_dims = data_dims
 
-    # def __descriptor__(self):
-    #     shape = [dace.symbol(f"__sym_{next(sym_ctr)}_{ax}_size") for ax in self.axes]
-    #     strides = [dace.symbol(f"__sym_{next(sym_ctr)}_{ax}_stride") for ax in self.axes]
-    #     return dace.data.Array(shape=shape, strides=strides, dtype=dace.typeclass(str(self.dtype)))
+    def __descriptor__(self):
+        # Ignore, use JIT
+        return None
 
     def __repr__(self):
         args = f"dtype={repr(self.dtype)}, axes={repr(self.axes)}, data_dims={repr(self.data_dims)}"
