@@ -224,14 +224,8 @@ class FrozenStencil(SDFGConvertible):
             if array.transient:
                 array.lifetime = dace.dtypes.AllocationLifetime.SDFG
 
-        true_args = [
-            arg
-            for arg in wrapper_sdfg.signature_arglist(with_types=False)
-            if not re.match("__.*_._stride", arg) and not re.match("__.*_._size", arg)
-        ]
         signature = self.__sdfg_signature__()
         wrapper_sdfg.arg_names = [a for a in signature[0] if a not in signature[1]]
-        assert len(wrapper_sdfg.arg_names) == len(true_args)
 
         return wrapper_sdfg
 
@@ -766,12 +760,8 @@ class StencilObject(abc.ABC, dace.frontend.python.common.SDFGConvertible):
         ):
             if arg in special_args:
                 continue
-            if arg in self.field_info and self.field_info[arg] is None:
-                consts.append(arg)
-            if arg in self.parameter_info and self.parameter_info[arg] is None:
-                consts.append(arg)
             args.append(arg)
-        return (args, consts)
+        return (args, [])
 
     def closure_resolver(
         self,
