@@ -26,7 +26,7 @@ import typing
 import warnings
 from dataclasses import dataclass
 from pickle import dumps
-from typing import Any, Callable, ClassVar, Dict, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, ClassVar, Dict, Optional, Sequence, Tuple, Union, Set
 
 import dace
 import dace.frontend.python.common
@@ -269,7 +269,7 @@ class FrozenStencil(SDFGConvertible):
         self._assert_dace_backend()
         return {}
 
-    def closure_resolver(self, constant_args, parent_closure=None):
+    def closure_resolver(self, constant_args, given_args, parent_closure=None):
         self._assert_dace_backend()
         return SDFGClosure()
 
@@ -766,6 +766,7 @@ class StencilObject(abc.ABC, dace.frontend.python.common.SDFGConvertible):
     def closure_resolver(
         self,
         constant_args: Dict[str, Any],
+        given_args: Set[str],
         parent_closure: Optional["dace.frontend.python.common.SDFGClosure"] = None,
     ) -> "dace.frontend.python.common.SDFGClosure":
         return dace.frontend.python.common.SDFGClosure()
