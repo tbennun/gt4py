@@ -19,14 +19,13 @@ import collections.abc
 import copy
 import inspect
 import os
-import re
 import sys
 import time
 import typing
 import warnings
 from dataclasses import dataclass
 from pickle import dumps
-from typing import Any, Callable, ClassVar, Dict, Optional, Sequence, Tuple, Union, Set
+from typing import Any, Callable, ClassVar, Dict, Optional, Sequence, Set, Tuple, Union
 
 import dace
 import dace.frontend.python.common
@@ -236,7 +235,8 @@ class FrozenStencil(SDFGConvertible):
                 f' (found "{self.stencil_object.backend}")'
             )
 
-    def __sdfg__(self, *args, **kwargs):
+    def __sdfg__(self, **kwargs):
+
         self._assert_dace_backend()
         frozen_hash = shash(type(self.stencil_object)._gt_id_, self.origin, self.domain)
 
@@ -259,7 +259,22 @@ class FrozenStencil(SDFGConvertible):
         _loaded_sdfgs[frozen_hash] = self._sdfg_freeze_domain_and_origin(inner_sdfg)
         _loaded_sdfgs[frozen_hash].save(filename)
 
-        return copy.deepcopy(_loaded_sdfgs[frozen_hash])
+        res_sdfg = copy.deepcopy(_loaded_sdfgs[frozen_hash])
+        for name, info in self.stencil_object.field_info.items():
+            if info is None and name in kwargs:
+                outer_array = kwargs[name]
+                res_sdfg.add_array(
+                    name,
+                    shape=outer_array.shape,
+                    dtype=outer_array.dtype,
+                    strides=outer_array.strides,
+                )
+
+        for name, info in self.stencil_object.parameter_info.items():
+            if info is None and name in kwargs:
+                res_sdfg.add_symbol(name, stype=dace.typeclass(str(np.asarray(kwargs[name]).dtype)))
+
+        return res_sdfg
 
     def __sdfg_signature__(self):
         self._assert_dace_backend()
@@ -753,7 +768,6 @@ class StencilObject(abc.ABC, dace.frontend.python.common.SDFGConvertible):
     def __sdfg_signature__(self) -> Tuple[Sequence[str], Sequence[str]]:
         special_args = {"self", "domain", "origin", "validate_args", "exec_info"}
         args = []
-        consts = []
         for arg in (
             inspect.getfullargspec(self.__call__).args
             + inspect.getfullargspec(self.__call__).kwonlyargs

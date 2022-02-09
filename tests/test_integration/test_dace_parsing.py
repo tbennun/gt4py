@@ -1,3 +1,5 @@
+import re
+
 import dace
 import hypothesis.strategies as hyp_st
 import numpy as np
@@ -90,7 +92,6 @@ def test_optional_arg_noprovide():
     assert np.sum(outp, axis=(0, 1, 2)) == 90 * 7.0
 
 
-# @pytest.mark.xfail(reason="Optional arguments can't be keyword arguments in dace parsing.")
 def test_optional_arg_provide():
     @gtscript.stencil(backend="gtc:dace")
     def stencil(
@@ -112,7 +113,7 @@ def test_optional_arg_provide():
 
     @dace.program
     def call_frozen_stencil():
-        frozen_stencil(inp, unused_field, outp, 7.0)
+        frozen_stencil(inp=inp, unused_field=unused_field, outp=outp, unused_par=7.0)
 
     call_frozen_stencil()
 
@@ -151,7 +152,8 @@ def test_nondace_raises():
 
     with pytest.raises(
         TypeError,
-        match="Only dace backends are supported in DaCe-orchestrated programs."
-        ' (found "gtc:numpy")',
+        match=re.escape(
+            "Only dace backends are supported in DaCe-orchestrated programs." ' (found "gtc:numpy")'
+        ),
     ):
         call_frozen_stencil()
