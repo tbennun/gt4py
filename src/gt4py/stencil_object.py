@@ -28,6 +28,7 @@ from pickle import dumps
 from typing import Any, Callable, ClassVar, Dict, Optional, Sequence, Set, Tuple, Union
 
 import dace
+import dace.data
 import dace.frontend.python.common
 import numpy as np
 from dace.frontend.python.common import SDFGClosure, SDFGConvertible
@@ -272,7 +273,10 @@ class FrozenStencil(SDFGConvertible):
 
         for name, info in self.stencil_object.parameter_info.items():
             if info is None and name in kwargs:
-                res_sdfg.add_symbol(name, stype=dace.typeclass(str(np.asarray(kwargs[name]).dtype)))
+                if isinstance(kwargs[name], dace.data.Scalar):
+                    res_sdfg.add_symbol(name, stype=kwargs[name].dtype)
+                else:
+                    res_sdfg.add_symbol(name, stype=dace.typeclass(type(kwargs[name])))
 
         return res_sdfg
 
