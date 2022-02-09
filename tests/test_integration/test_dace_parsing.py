@@ -29,7 +29,7 @@ def tuple_st(min_value, max_value):
 
 @pytest.mark.parametrize("domain", [(0, 2, 3), (3, 3, 3), (1, 1, 1)])
 @pytest.mark.parametrize("outp_origin", [(0, 0, 0), (7, 7, 7), (2, 2, 0)])
-def test_origin_offsetting(dace_stencil, domain, outp_origin):
+def test_origin_offsetting_frozen(dace_stencil, domain, outp_origin):
 
     frozen_stencil = dace_stencil.freeze(
         domain=domain, origin={"inp": (0, 0, 0), "outp": outp_origin}
@@ -41,6 +41,33 @@ def test_origin_offsetting(dace_stencil, domain, outp_origin):
     @dace.program
     def call_frozen_stencil():
         frozen_stencil(inp=inp, outp=outp)
+
+    call_frozen_stencil()
+
+    assert np.allclose(inp, 7.0)
+    assert np.allclose(
+        outp[
+            outp_origin[0] : outp_origin[0] + domain[0],
+            outp_origin[1] : outp_origin[1] + domain[1],
+            outp_origin[2] : outp_origin[2] + domain[2],
+        ],
+        7.0,
+    )
+    assert np.sum(outp, axis=(0, 1, 2)) == np.prod(domain) * 7.0
+
+
+@pytest.mark.parametrize("domain", [(0, 2, 3), (3, 3, 3), (1, 1, 1)])
+@pytest.mark.parametrize("outp_origin", [(0, 0, 0), (7, 7, 7), (2, 2, 0)])
+def test_origin_offsetting_nofrozen(dace_stencil, domain, outp_origin):
+
+    inp = np.full(fill_value=7.0, dtype=np.float64, shape=(10, 10, 10))
+    outp = np.zeros(dtype=np.float64, shape=(10, 10, 10))
+
+    origin = {"inp": (0, 0, 0), "outp": outp_origin}
+
+    @dace.program
+    def call_frozen_stencil():
+        dace_stencil(inp=inp, outp=outp, domain=domain, origin=origin)
 
     call_frozen_stencil()
 
@@ -129,7 +156,7 @@ def test_optional_arg_provide():
     assert np.sum(outp, axis=(0, 1, 2)) == 90 * 7.0
 
 
-def test_optional_provide_aot():
+def test_optional_arg_provide_aot():
     @gtscript.stencil(backend="gtc:dace")
     def stencil(
         inp: gtscript.Field[np.float64],
