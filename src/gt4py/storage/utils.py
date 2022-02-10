@@ -137,7 +137,9 @@ def strides_from_padded_shape(padded_size, order_idx, itemsize):
     return list(strides)
 
 
-def allocate(default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f):
+def allocate(
+    default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f, return_alignment=False
+):
     dtype = np.dtype(dtype)
     assert (
         alignment_bytes % dtype.itemsize
@@ -170,6 +172,8 @@ def allocate(default_origin, shape, layout_map, dtype, alignment_bytes, allocate
     if field.ndim > 0:
         field.strides = strides
         field = field[tuple(slice(0, s, None) for s in shape)]
+    if return_alignment:
+        return raw_buffer, field, alignment_offset
     return raw_buffer, field
 
 
@@ -230,14 +234,16 @@ def allocate_cpu(default_origin, shape, layout_map, dtype, alignment_bytes):
     return allocate(default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f)
 
 
-def allocate_gpu(default_origin, shape, layout_map, dtype, alignment_bytes):
+def allocate_gpu(default_origin, shape, layout_map, dtype, alignment_bytes, return_alignment=False):
     def allocate_f(size, dtype):
         cp.cuda.set_allocator(cp.cuda.malloc_managed)
         device_buffer = cp.empty(size, dtype)
         array = cpu_view(device_buffer)
         return array, device_buffer
 
-    return allocate(default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f)
+    return allocate(
+        default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f, return_alignment
+    )
 
 
 def gpu_view(cpu_array):

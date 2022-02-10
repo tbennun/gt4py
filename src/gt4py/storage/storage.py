@@ -260,6 +260,8 @@ class Storage(np.ndarray):
             strides=[s // self.itemsize for s in self.strides],
             dtype=dace.typeclass(str(self.dtype)),
             storage=storage,
+            total_size=self._raw_buffer.size,
+            start_offset=self._alignment_offset,
         )
         descriptor.default_origin = self.default_origin
         return descriptor
@@ -271,12 +273,18 @@ class GPUStorage(Storage):
     @classmethod
     def _construct(cls, backend, dtype, default_origin, shape, alignment, layout_map):
 
-        (raw_buffer, field) = storage_utils.allocate_gpu(
-            default_origin, shape, layout_map, dtype, alignment * dtype.itemsize
+        (raw_buffer, field, alignment_offset) = storage_utils.allocate_gpu(
+            default_origin,
+            shape,
+            layout_map,
+            dtype,
+            alignment * dtype.itemsize,
+            return_alignment=True,
         )
         obj = field.view(_ViewableNdarray)
         obj = obj.view(GPUStorage)
         obj._raw_buffer = raw_buffer
+        obj._alignment_offset = alignment_offset
         obj.default_origin = default_origin
         return obj
 
