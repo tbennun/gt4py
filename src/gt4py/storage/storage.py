@@ -383,13 +383,19 @@ class CPUStorage(Storage):
 
     @classmethod
     def _construct(cls, backend, dtype, default_origin, shape, alignment, layout_map):
-        (raw_buffer, field) = storage_utils.allocate_cpu(
-            default_origin, shape, layout_map, dtype, alignment * dtype.itemsize
+        (raw_buffer, field, alignment_offset) = storage_utils.allocate_cpu(
+            default_origin,
+            shape,
+            layout_map,
+            dtype,
+            alignment * dtype.itemsize,
+            return_alignment=True,
         )
         obj = field.view(_ViewableNdarray)
         obj = obj.view(CPUStorage)
         obj._raw_buffer = raw_buffer
         obj.default_origin = default_origin
+        obj._alignment_offset = alignment_offset
         return obj
 
     def _check_data(self):

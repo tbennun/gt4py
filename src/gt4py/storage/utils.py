@@ -226,12 +226,20 @@ def allocate_gpu_unmanaged(default_origin, shape, layout_map, dtype, alignment_b
     return raw_buffer, field, device_raw_buffer, device_field
 
 
-def allocate_cpu(default_origin, shape, layout_map, dtype, alignment_bytes):
+def allocate_cpu(default_origin, shape, layout_map, dtype, alignment_bytes, return_alignment=False):
     def allocate_f(size, dtype):
         raw_buffer = np.empty(size, dtype)
         return raw_buffer, raw_buffer
 
-    return allocate(default_origin, shape, layout_map, dtype, alignment_bytes, allocate_f)
+    return allocate(
+        default_origin,
+        shape,
+        layout_map,
+        dtype,
+        alignment_bytes,
+        allocate_f,
+        return_alignment=return_alignment,
+    )
 
 
 def allocate_gpu(default_origin, shape, layout_map, dtype, alignment_bytes, return_alignment=False):
