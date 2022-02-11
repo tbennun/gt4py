@@ -21,21 +21,30 @@ from dataclasses import dataclass
 from typing import Dict, List, Tuple, Union
 
 import dace.data
+import dace.dtypes
 import dace.properties
 import dace.subsets
 import networkx as nx
 from dace import library
 
+from gt4py.definitions import Extent
 from gtc import oir
 from gtc.common import DataType, LoopOrder, VariableKOffset, typestr_to_data_type
 from gtc.dace.utils import (
     CartesianIterationSpace,
     OIRFieldRenamer,
-    assert_sdfg_equal,
     dace_dtype_to_typestr,
     get_node_name_mapping,
 )
-from gtc.oir import CacheDesc, HorizontalExecution, Interval, VerticalLoop, VerticalLoopSection
+from gtc.oir import (
+    CacheDesc,
+    Decl,
+    FieldDecl,
+    HorizontalExecution,
+    Interval,
+    VerticalLoop,
+    VerticalLoopSection,
+)
 
 
 class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
@@ -246,3 +255,107 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
         if len(self.oir_node.iter_tree().if_isinstance(VariableKOffset).to_list()) > 0:
             res.add("k")
         return res
+
+
+def set_expansion_order(self, expansion_order):
+    if not set(StencilComputation.expansion_order.default) == set(expansion_order) or not len(
+        StencilComputation.expansion_order.default
+    ) == len(expansion_order):
+        raise ValueError(
+            "StencilComputation.expansion_order must be a permutation of"
+            + str(StencilComputation.expansion_order.default)
+        )
+    if expansion_order.index("K") < expansion_order.index("Sections"):
+        raise ValueError("K iteration must be per section.")
+    if any(expansion_order.index(ij) < expansion_order.index("Stages") for ij in "IJ"):
+        raise ValueError("I and J iteration must be per stage.")
+    if expansion_order.index("Stages") < expansion_order.index("Sections"):
+        raise ValueError("Stages are per-section")
+    self._expansion_order = list(str(eo) for eo in expansion_order)
+
+
+@library.node
+class StencilComputation(library.LibraryNode):
+    implementations: Dict[str, dace.library.ExpandTransformation] = {}
+    default_implementation = "default"
+
+    oir_node = dace.properties.DataclassProperty(dtype=VerticalLoop, default=None, allow_none=True)
+    declarations = dace.properties.DictProperty(
+        key_type=str, value_type=Decl, default=None, allow_none=True
+    )
+    extents = dace.properties.DictProperty(
+        key_type=int, value_type=Extent, default=None, allow_none=True
+    )
+    tile_sizes = dace.properties.DictProperty(
+        key_type=str, value_type=int, default={"I": 8, "J": 8}, allow_none=True
+    )
+    expansion_order = dace.properties.ListProperty(
+        desc="""
+        currently supported:
+         ["Sections", "Stages", "I", "J", "K"]
+         ["Sections", "Stages", "I", "K", "J"]
+         ["Sections", "Stages", "J", "I", "K"]
+         ["Sections", "Stages", "J", "K", "I"]
+         ["Sections", "Stages", "K", "I", "J"]
+         ["Sections", "Stages", "K", "J", "I"]
+         ["Sections", "K", "Stages", "I", "J"]
+         ["Sections", "K", "Stages", "J", "I"]
+        """,
+        element_type=str,
+        default=["Tiling", "Sections", "K", "Stages", "J", "I"],
+        allow_none=False,
+        setter=set_expansion_order,
+    )
+
+    _dace_library_name = "StencilComputation"
+
+    def __init__(
+        self,
+        name="unnamed_vloop",
+        oir_node: VerticalLoop = None,
+        extents: Dict[int, Extent] = None,
+        declarations: Dict[str, Decl] = None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__(name=name, *args, **kwargs)
+
+        if oir_node is not None:
+            self.oir_node = oir_node
+            self.extents = extents
+            self.declarations = declarations
+            if oir_node.loc is not None:
+
+                self.debuginfo = dace.dtypes.DebugInfo(
+                    oir_node.loc.line,
+                    oir_node.loc.column,
+                    oir_node.loc.line,
+                    oir_node.loc.column,
+                    oir_node.loc.source,
+                )
+
+    @property
+    def field_decls(self) -> Dict[str, FieldDecl]:
+        return {
+            name: decl for name, decl in self.declarations.items() if isinstance(decl, FieldDecl)
+        }
+
+    def to_json(self, parent):
+        protocol = pickle.DEFAULT_PROTOCOL
+        pbytes = pickle.dumps(self, protocol=protocol)
+
+        jsonobj = super().to_json(parent)
+        jsonobj["classpath"] = dace.nodes.full_class_path(self)
+        jsonobj["attributes"]["protocol"] = protocol
+        jsonobj["attributes"]["pickle"] = base64.b64encode(pbytes).decode("utf-8")
+
+        return jsonobj
+
+    @classmethod
+    def from_json(cls, json_obj, context=None):
+        if "attributes" not in json_obj:
+            b64string = json_obj["pickle"]
+        else:
+            b64string = json_obj["attributes"]["pickle"]
+        byte_repr = base64.b64decode(b64string)
+        return pickle.loads(byte_repr)

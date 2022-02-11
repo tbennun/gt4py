@@ -23,7 +23,7 @@ from gt4py.definitions import BuildOptions
 from gt4py.frontend.gtscript_frontend import GTScriptFrontend
 from gtc.common import AxisBound, DataType
 from gtc.dace.dace_to_oir import convert
-from gtc.dace.oir_to_dace import OirSDFGBuilder
+from gtc.dace.oir_to_dace import OirAnalysisSDFGBuilder
 from gtc.dace.utils import assert_sdfg_equal
 from gtc.gtir_to_oir import GTIRToOIR
 from gtc.oir import Interval, Literal
@@ -58,12 +58,12 @@ def test_stencils_roundtrip(stencil_name):
     stencil_def = stencil_registry[stencil_name]
     externals = externals_registry[stencil_name]
     oir = stencil_def_to_oir(stencil_def, externals)
-    sdfg = OirSDFGBuilder().visit(oir)
+    sdfg = OirAnalysisSDFGBuilder().visit(oir)
 
     sdfg_pre = deepcopy(sdfg)
 
     oir = convert(sdfg)
-    sdfg_post = OirSDFGBuilder().visit(oir)
+    sdfg_post = OirAnalysisSDFGBuilder().visit(oir)
     assert_sdfg_equal(sdfg_pre, sdfg_post)
 
 
@@ -89,7 +89,7 @@ def test_same_node_read_write_not_overlap():
             ),
         ]
     )
-    sdfg = OirSDFGBuilder().visit(oir)
+    sdfg = OirAnalysisSDFGBuilder().visit(oir)
     convert(sdfg)
 
 
@@ -124,5 +124,5 @@ def test_two_vertical_loops_no_read():
             ),
         ]
     )
-    sdfg = OirSDFGBuilder().visit(oir_pre)
+    sdfg = OirAnalysisSDFGBuilder().visit(oir_pre)
     convert(sdfg)

@@ -21,7 +21,7 @@ from dace.transformation.transformation import SingleStateTransformation
 from gtc import oir
 from gtc.dace import dace_to_oir
 from gtc.dace.nodes import HorizontalExecutionLibraryNode
-from gtc.dace.oir_to_dace import OirSDFGBuilder
+from gtc.dace.oir_to_dace import OirAnalysisSDFGBuilder
 from gtc.dace.utils import iter_vertical_loop_section_sub_sdfgs
 
 
@@ -37,7 +37,7 @@ def optimize_horizontal_executions(
             "oir dace optimize_horizontal_executions is not yet supported with variable vertical accesses. See https://github.com/GridTools/gt4py/issues/517"
         )
         return stencil
-    sdfg = OirSDFGBuilder().visit(stencil)
+    sdfg = OirAnalysisSDFGBuilder().visit(stencil)
     api_fields = {param.name for param in stencil.params}
     for subgraph in iter_vertical_loop_section_sub_sdfgs(sdfg):
         subgraph.apply_transformations_repeated(

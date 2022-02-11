@@ -134,7 +134,7 @@ def expand_and_wrap_sdfg(
     # stencils without effect
     if all(info is None for info in args_data.field_info.values()):
         sdfg = dace.SDFG(gtir.name)
-        sdfg = sdfg.add_state(gtir.name)
+        sdfg.add_state(gtir.name)
         return sdfg
 
     for array in sdfg.arrays.values():
@@ -143,7 +143,6 @@ def expand_and_wrap_sdfg(
     sdfg.expand_library_nodes(recursive=True)
     specialize_transient_strides(sdfg, layout_map=layout_map)
     post_expand_trafos(sdfg)
-
     return sdfg
 
 
