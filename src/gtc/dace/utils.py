@@ -996,6 +996,9 @@ class AccessInfoCollector(NodeVisitor):
         self.visit(node.mask, is_conditional=is_conditional, **kwargs)
         self.visit(node.body, is_conditional=True, regions=regions, **kwargs)
 
+    def visit_While(self, node: oir.While, *, is_conditional=False, **kwargs):
+        self.generic_visit(node, is_conditional=True, **kwargs)
+
     @staticmethod
     def _regions_as_grid_subset(
         regions: List[oir.HorizontalMask],

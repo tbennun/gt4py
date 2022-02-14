@@ -314,6 +314,19 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         body_code = [indent + b for b in body_code]
         return "\n".join([mask_str] + body_code)
 
+    def visit_While(self, node: oir.While, **kwargs: Any):
+        body = self.visit(node.body, **kwargs)
+        body = [line for block in body for line in block.split("\n")]
+        cond = self.visit(node.cond, is_target=False, **kwargs)
+        init = "num_iter = 0"
+        max_iter = 1000
+        cond += f" and (num_iter < {max_iter})"
+        body.append("num_iter += 1")
+        indent = " " * 4
+        delim = f"\n{indent}"
+        code_as_str = f"{init}\nwhile {cond}:\n{indent}{delim.join(body)}"
+        return code_as_str
+
     def visit_HorizontalMask(self, node: oir.HorizontalMask, **kwargs):
         clauses: List[str] = []
         imin = get_axis_bound_str(node.i.start, dcir.Axis.I.domain_symbol())
