@@ -27,6 +27,10 @@ class Axis(StrEnum):
     def dims_3d():
         yield from [Axis.I, Axis.J, Axis.K]
 
+    @staticmethod
+    def horizontal_axes():
+        yield from [Axis.I, Axis.J]
+
     def to_idx(self):
         return [Axis.I, Axis.J, Axis.K].index(self)
 
@@ -84,9 +88,32 @@ class DomainInterval(Node):
             end=max(first.end, second.end),
         )
 
+    @classmethod
+    def intersection(cls, first, second):
+        assert (first.start <= second.end and first.end >= second.start) or (
+            second.start <= first.end and second.end >= first.start
+        )
+        return cls(
+            start=max(first.start, second.start),
+            end=min(first.end, second.end),
+        )
+
     @property
     def idx_range(self):
         return str(self.start), str(self.end)
+
+    def shifted(self, offset: int):
+        return DomainInterval(
+            start=AxisBound(
+                axis=self.start.axis, level=self.start.level, offset=self.start.offset + offset
+            ),
+            end=AxisBound(
+                axis=self.end.axis, level=self.end.level, offset=self.end.offset + offset
+            ),
+        )
+
+    def is_subset_of(self, other: "DomainInterval") -> bool:
+        return self.start >= other.start and self.end <= other.end
 
 
 class TileInterval(Node):
@@ -309,6 +336,7 @@ class GridSubset(Node):
 
 class FieldAccessInfo(Node):
     grid_subset: GridSubset
+    global_grid_subset: GridSubset
     dynamic_access: bool = False
     variable_offset_axes: List[Axis] = []
 
@@ -331,18 +359,21 @@ class FieldAccessInfo(Node):
                 assert isinstance(field_interval, IndexWithExtent)
                 extent = field_interval.extent
                 if isinstance(grid_interval, DomainInterval):
-                    res_intervals[axis] = DomainInterval(
-                        start=AxisBound(
-                            axis=axis,
-                            level=grid_interval.start.level,
-                            offset=grid_interval.start.offset + extent[0],
-                        ),
-                        end=AxisBound(
-                            axis=axis,
-                            level=grid_interval.end.level,
-                            offset=grid_interval.end.offset + extent[1],
-                        ),
-                    )
+                    if axis in self.global_grid_subset.intervals:
+                        res_intervals[axis] = self.global_grid_subset.intervals[axis]
+                    else:
+                        res_intervals[axis] = DomainInterval(
+                            start=AxisBound(
+                                axis=axis,
+                                level=grid_interval.start.level,
+                                offset=grid_interval.start.offset + extent[0],
+                            ),
+                            end=AxisBound(
+                                axis=axis,
+                                level=grid_interval.end.level,
+                                offset=grid_interval.end.offset + extent[1],
+                            ),
+                        )
                 elif isinstance(grid_interval, TileInterval):
                     res_intervals[axis] = TileInterval(
                         axis=axis,
@@ -361,10 +392,12 @@ class FieldAccessInfo(Node):
             grid_subset=GridSubset(intervals=res_intervals),
             dynamic_access=self.dynamic_access,
             variable_offset_axes=self.variable_offset_axes,
+            global_grid_subset=self.global_grid_subset,
         )
 
     def union(self, other: "FieldAccessInfo"):
         grid_subset = self.grid_subset.union(other.grid_subset)
+        global_subset = self.global_grid_subset.union(other.global_grid_subset)
         variable_offset_axes = [
             axis
             for axis in Axis.dims_3d()
@@ -374,6 +407,7 @@ class FieldAccessInfo(Node):
             grid_subset=grid_subset,
             dynamic_access=self.dynamic_access or other.dynamic_access,
             variable_offset_axes=variable_offset_axes,
+            global_grid_subset=global_subset,
         )
 
     def clamp_full_axis(self, axis):
@@ -391,6 +425,21 @@ class FieldAccessInfo(Node):
             grid_subset = grid_subset.set_interval(axis, full_interval)
         return FieldAccessInfo(
             grid_subset=grid_subset,
+            dynamic_access=self.dynamic_access,
+            variable_offset_axes=self.variable_offset_axes,
+            global_grid_subset=self.global_grid_subset,
+        )
+
+    def untile(self, tile_axes: List[Axis]):
+        res_intervals = dict()
+        for axis, interval in self.grid_subset.intervals.items():
+            if isinstance(interval, TileInterval) and axis in tile_axes:
+                res_intervals[axis] = self.global_grid_subset.intervals[axis]
+            else:
+                res_intervals[axis] = interval
+        return FieldAccessInfo(
+            grid_subset=GridSubset(intervals=res_intervals),
+            global_grid_subset=self.global_grid_subset,
             dynamic_access=self.dynamic_access,
             variable_offset_axes=self.variable_offset_axes,
         )

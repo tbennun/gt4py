@@ -314,6 +314,22 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         body_code = [indent + b for b in body_code]
         return "\n".join([mask_str] + body_code)
 
+    def visit_HorizontalMask(self, node: oir.HorizontalMask, **kwargs):
+        clauses: List[str] = []
+        imin = get_axis_bound_str(node.i.start, dcir.Axis.I.domain_symbol())
+        if imin:
+            clauses.append(f"{dcir.Axis.I.iteration_symbol()} >= {imin}")
+        imax = get_axis_bound_str(node.i.end, dcir.Axis.I.domain_symbol())
+        if imax:
+            clauses.append(f"{dcir.Axis.I.iteration_symbol()} < {imax}")
+        jmin = get_axis_bound_str(node.j.start, dcir.Axis.J.domain_symbol())
+        if jmin:
+            clauses.append(f"{dcir.Axis.J.iteration_symbol()} >= {jmin}")
+        jmax = get_axis_bound_str(node.j.end, dcir.Axis.J.domain_symbol())
+        if jmax:
+            clauses.append(f"{dcir.Axis.J.iteration_symbol()} < {jmax}")
+        return " and ".join(clauses)
+
     class RemoveCastInIndexVisitor(eve.NodeTranslator):
         def visit_FieldAccess(self, node: oir.FieldAccess):
             if node.data_index:
@@ -531,12 +547,14 @@ class DaCeIRBuilder(NodeTranslator):
         decls = [self.visit(decl) for decl in node.declarations]
         stmts = [self.visit(stmt) for stmt in node.body]
 
-        ijk_subset = dcir.GridSubset.from_gt4py_extent(extent).set_interval(
+        domain_subset = dcir.GridSubset.from_gt4py_extent(extent).set_interval(
             dcir.Axis.K, iteration_ctx.grid_subset.intervals[dcir.Axis.K]
         )
 
         if "Tiling" in expansion_order:
-            ijk_subset = ijk_subset.tile(global_ctx.library_node.tile_sizes)
+            local_subset = domain_subset.tile(global_ctx.library_node.tile_sizes)
+        else:
+            local_subset = domain_subset
 
         grid_subset = dcir.GridSubset.single_gridpoint()
 
@@ -562,7 +580,7 @@ class DaCeIRBuilder(NodeTranslator):
             if axis not in set(dcir.Axis.dims_3d()):
                 break
             axis = dcir.Axis(axis)
-            interval = ijk_subset.intervals[axis]
+            interval = local_subset.intervals[axis]
             grid_subset = grid_subset.set_interval(axis, interval)
             dcir_node = self._add_domain_iteration(
                 dcir_node,

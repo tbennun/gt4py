@@ -16,7 +16,7 @@
 
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Collection, Dict, Iterator, List, Tuple, Union
+from typing import TYPE_CHECKING, Any, Collection, Dict, Iterator, List, Optional, Tuple, Union
 
 import dace
 import dace.data
@@ -628,9 +628,6 @@ def nodes_extent_calculation(
                         ext[0] = iteration_interval.start.offset
                         if region_interval.start is not None:
                             if region_interval.start.level == common.LevelMarker.START:
-                                # offset = (
-                                #     region_interval.start.offset - iteration_interval.start.offset
-                                # )
                                 ext[0] = max(
                                     ext[0] + acc.offset[dim],
                                     region_interval.start.offset + acc.offset[dim],
@@ -642,8 +639,6 @@ def nodes_extent_calculation(
                         ext[1] = iteration_interval.end.offset
                         if region_interval.end is not None:
                             if region_interval.end.level == common.LevelMarker.END:
-                                # offset = region_interval.end.offset - iteration_interval.end.offset
-                                # ext[1] += acc.offset[dim] + offset
                                 ext[1] = min(
                                     ext[1] + acc.offset[dim],
                                     region_interval.end.offset + acc.offset[dim],
@@ -652,7 +647,8 @@ def nodes_extent_calculation(
                             ext[1] += acc.offset[dim]
                         ext[1] = max(0, ext[1])
 
-                        access_extent.append(tuple(ext))
+                        ext_tuple = (int(ext[0]), int(ext[1]))
+                        access_extent.append(ext_tuple)
 
                 if acc.field not in access_spaces:
                     access_spaces[acc.field] = tuple(access_extent)
@@ -919,13 +915,23 @@ class AccessInfoCollector(NodeVisitor):
         inner_ctx = self.Context(
             axes=ctx.axes,
         )
-        self.visit(node.horizontal_executions, block_extents=block_extents, ctx=inner_ctx, **kwargs)
+
+        if grid_subset is None:
+            grid_subset = dcir.GridSubset.from_interval(node.interval, dcir.Axis.K)
+        elif dcir.Axis.K not in grid_subset.intervals:
+            intervals = dict(dcir.GridSubset.from_interval(node.interval, dcir.Axis.K).intervals)
+            intervals.update(grid_subset.intervals)
+            grid_subset = dcir.GridSubset(intervals=intervals)
+        self.visit(
+            node.horizontal_executions,
+            block_extents=block_extents,
+            ctx=inner_ctx,
+            grid_subset=grid_subset,
+            **kwargs,
+        )
         inner_infos = inner_ctx.access_infos
 
-        if grid_subset is None or dcir.Axis.K not in grid_subset.intervals:
-            k_grid = dcir.GridSubset.from_interval(node.interval, dcir.Axis.K)
-        else:
-            k_grid = dcir.GridSubset.from_interval(grid_subset.intervals[dcir.Axis.K], dcir.Axis.K)
+        k_grid = dcir.GridSubset.from_interval(grid_subset.intervals[dcir.Axis.K], dcir.Axis.K)
         inner_infos = {name: info.apply_iteration(k_grid) for name, info in inner_infos.items()}
 
         ctx.access_infos.update(
@@ -953,13 +959,22 @@ class AccessInfoCollector(NodeVisitor):
         inner_ctx = self.Context(
             axes=ctx.axes,
         )
-        self.visit(node.body, horizontal_extent=horizontal_extent, ctx=inner_ctx, **kwargs)
         inner_infos = inner_ctx.access_infos
         ij_grid = dcir.GridSubset.from_gt4py_extent(horizontal_extent)
+
+        self.visit(
+            node.body,
+            horizontal_extent=horizontal_extent,
+            ctx=inner_ctx,
+            he_grid=ij_grid,
+            **kwargs,
+        )
+
         if grid_subset is not None:
             for axis in ij_grid.axes():
                 if axis in grid_subset.intervals:
                     ij_grid = ij_grid.set_interval(axis, grid_subset.intervals[axis])
+
         inner_infos = {name: info.apply_iteration(ij_grid) for name, info in inner_infos.items()}
 
         ctx.access_infos.update(
@@ -976,11 +991,57 @@ class AccessInfoCollector(NodeVisitor):
         self.visit(node.left, is_write=True, **kwargs)
 
     def visit_MaskStmt(self, node: oir.MaskStmt, *, is_conditional=False, **kwargs):
+        regions = node.mask.iter_tree().if_isinstance(oir.HorizontalMask).to_list()
+
         self.visit(node.mask, is_conditional=is_conditional, **kwargs)
-        self.visit(node.body, is_conditional=True, **kwargs)
+        self.visit(node.body, is_conditional=True, regions=regions, **kwargs)
+
+    @staticmethod
+    def _regions_as_grid_subset(
+        regions: List[oir.HorizontalMask],
+        he_grid: "dcir.GridSubset",
+        offset: List[Optional[int]],
+    ):
+        from gtc import daceir as dcir
+
+        res: Dict[
+            dcir.Axis, Union[dcir.DomainInterval, dcir.TileInterval, dcir.IndexWithExtent]
+        ] = dict()
+        if regions is not None:
+            for mask in regions:
+                for axis, oir_interval in zip(dcir.Axis.horizontal_axes(), mask.intervals):
+                    start = (
+                        oir_interval.start
+                        if oir_interval.start is not None
+                        else he_grid.intervals[axis].start
+                    )
+                    end = (
+                        oir_interval.end
+                        if oir_interval.end is not None
+                        else he_grid.intervals[axis].end
+                    )
+                    dcir_interval = dcir.DomainInterval(
+                        start=dcir.AxisBound.from_common(axis, start),
+                        end=dcir.AxisBound.from_common(axis, end),
+                    )
+                    res[axis] = dcir.DomainInterval.union(
+                        dcir_interval, res.get(axis, dcir_interval)
+                    )
+        for axis in dcir.Axis.horizontal_axes():
+            iteration_interval = he_grid.intervals[axis]
+            mask_interval = res.get(axis, iteration_interval)
+            res[axis] = dcir.DomainInterval.intersection(iteration_interval, mask_interval).shifted(
+                offset[axis.to_idx()]
+            )
+        return dcir.GridSubset(intervals=res)
 
     def _make_access_info(
-        self, offset_node: Union[CartesianOffset, oir.VariableKOffset], axes, is_conditional
+        self,
+        offset_node: Union[CartesianOffset, oir.VariableKOffset],
+        axes,
+        is_conditional,
+        regions,
+        he_grid,
     ):
         from gtc import daceir as dcir
 
@@ -990,6 +1051,7 @@ class AccessInfoCollector(NodeVisitor):
         else:
             variable_offset_axes = []
 
+        regions_subset = self._regions_as_grid_subset(regions, he_grid, offset)
         intervals = dict()
         for axis in axes:
             if axis in variable_offset_axes:
@@ -1002,7 +1064,8 @@ class AccessInfoCollector(NodeVisitor):
         grid_subset = dcir.GridSubset(intervals=intervals)
         return dcir.FieldAccessInfo(
             grid_subset=grid_subset,
-            dynamic_access=len(variable_offset_axes) > 0 or is_conditional,
+            global_grid_subset=regions_subset,
+            dynamic_access=len(variable_offset_axes) > 0 or is_conditional or bool(regions),
             variable_offset_axes=variable_offset_axes,
         )
 
@@ -1013,15 +1076,29 @@ class AccessInfoCollector(NodeVisitor):
         is_write: bool = False,
         ctx: "AccessInfoCollector.Context",
         is_conditional=False,
+        regions=None,
+        he_grid,
         **kwargs,
     ):
-        self.visit(node.offset, is_conditional=is_conditional, ctx=ctx, is_write=False, **kwargs)
+        self.visit(
+            node.offset,
+            is_conditional=is_conditional,
+            ctx=ctx,
+            is_write=False,
+            regions=regions,
+            he_grid=he_grid,
+            **kwargs,
+        )
 
         if (not self.collect_read and (not is_write)) or (not self.collect_write and is_write):
             return
 
         access_info = self._make_access_info(
-            node.offset, axes=ctx.axes[node.name], is_conditional=is_conditional
+            node.offset,
+            axes=ctx.axes[node.name],
+            is_conditional=is_conditional,
+            regions=regions,
+            he_grid=he_grid,
         )
         ctx.access_infos[node.name] = access_info.union(
             ctx.access_infos.get(node.name, access_info)
@@ -1058,7 +1135,8 @@ def compute_dcir_access_infos(
         for name, access_info in ctx.access_infos.items():
             res[name] = access_info.union(
                 dcir.FieldAccessInfo(
-                    grid_subset=dcir.GridSubset.full_domain(axes=access_info.axes())
+                    grid_subset=dcir.GridSubset.full_domain(axes=access_info.axes()),
+                    global_grid_subset=access_info.global_grid_subset,
                 )
             )
     else:
@@ -1141,15 +1219,10 @@ class DaceStrMaker:
 
 
 def untile_access_info_dict(access_infos: Dict[str, "dcir.FieldAccessInfo"], axes):
-    from gtc import daceir as dcir
 
     res_infos = dict()
     for name, access_info in access_infos.items():
-        res_infos[name] = dcir.FieldAccessInfo(
-            dynamic_access=access_info.dynamic_access,
-            variable_offset_axes=access_info.variable_offset_axes,
-            grid_subset=access_info.grid_subset.untile(axes),
-        )
+        res_infos[name] = access_info.untile(axes)
     return res_infos
 
 
