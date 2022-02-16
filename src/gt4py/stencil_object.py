@@ -236,35 +236,11 @@ class FrozenStencil(SDFGConvertible):
                 f' (found "{self.stencil_object.backend}")'
             )
 
-    def __sdfg__(self, **kwargs):
-
-        self._assert_dace_backend()
-        frozen_hash = shash(type(self.stencil_object)._gt_id_, self.origin, self.domain)
-
-        # check if same sdfg already cached in memory
-        if frozen_hash in _loaded_sdfgs:
-            return copy.deepcopy(_loaded_sdfgs[frozen_hash])
-
-        # check if same sdfg already cached on disk
-        basename = os.path.splitext(self.stencil_object._file_name)[0]
-        filename = basename + "_" + str(frozen_hash) + ".sdfg"
-        try:
-            _loaded_sdfgs[frozen_hash] = dace.SDFG.from_file(filename)
-            return copy.deepcopy(_loaded_sdfgs[frozen_hash])
-        except FileNotFoundError:
-            pass
-
-        # otherwise, wrap and save sdfg from scratch
-        inner_sdfg = self.stencil_object.sdfg
-
-        _loaded_sdfgs[frozen_hash] = self._sdfg_freeze_domain_and_origin(inner_sdfg)
-        _loaded_sdfgs[frozen_hash].save(filename)
-
-        res_sdfg = copy.deepcopy(_loaded_sdfgs[frozen_hash])
+    def _add_optionals(self, sdfg, **kwargs):
         for name, info in self.stencil_object.field_info.items():
             if info is None and name in kwargs:
                 outer_array = kwargs[name]
-                res_sdfg.add_array(
+                sdfg.add_array(
                     name,
                     shape=outer_array.shape,
                     dtype=outer_array.dtype,
@@ -274,11 +250,36 @@ class FrozenStencil(SDFGConvertible):
         for name, info in self.stencil_object.parameter_info.items():
             if info is None and name in kwargs:
                 if isinstance(kwargs[name], dace.data.Scalar):
-                    res_sdfg.add_symbol(name, stype=kwargs[name].dtype)
+                    sdfg.add_symbol(name, stype=kwargs[name].dtype)
                 else:
-                    res_sdfg.add_symbol(name, stype=dace.typeclass(type(kwargs[name])))
+                    sdfg.add_symbol(name, stype=dace.typeclass(type(kwargs[name])))
+        return sdfg
 
-        return res_sdfg
+    def __sdfg__(self, **kwargs):
+
+        self._assert_dace_backend()
+        frozen_hash = shash(type(self.stencil_object)._gt_id_, self.origin, self.domain)
+
+        # check if same sdfg already cached in memory
+        if frozen_hash in _loaded_sdfgs:
+            return self._add_optionals(copy.deepcopy(_loaded_sdfgs[frozen_hash]), **kwargs)
+
+        # check if same sdfg already cached on disk
+        basename = os.path.splitext(self.stencil_object._file_name)[0]
+        filename = basename + "_" + str(frozen_hash) + ".sdfg"
+        try:
+            _loaded_sdfgs[frozen_hash] = dace.SDFG.from_file(filename)
+            return self._add_optionals(copy.deepcopy(_loaded_sdfgs[frozen_hash]), **kwargs)
+        except FileNotFoundError:
+            pass
+
+        # otherwise, wrap and save sdfg from scratch
+        inner_sdfg = self.stencil_object.sdfg
+
+        _loaded_sdfgs[frozen_hash] = self._sdfg_freeze_domain_and_origin(inner_sdfg)
+        _loaded_sdfgs[frozen_hash].save(filename)
+
+        return self._add_optionals(copy.deepcopy(_loaded_sdfgs[frozen_hash]), **kwargs)
 
     def __sdfg_signature__(self):
         self._assert_dace_backend()
