@@ -115,9 +115,9 @@ def replace_strides(arrays, get_layout_map):
             stride = 1
             for idx in reversed(np.argsort(layout)):
                 symbol = array.strides[idx]
-                size = array.shape[idx]
-                symbol_mapping[str(symbol)] = stride
-                stride *= size
+                if symbol.is_symbol:
+                    symbol_mapping[str(symbol)] = stride
+                stride *= array.shape[idx]
     return symbol_mapping
 
 
@@ -954,7 +954,7 @@ class AccessInfoCollector(NodeVisitor):
     ) -> Dict[str, "dcir.FieldAccessInfo"]:
         from gtc import daceir as dcir
 
-        horizontal_extent = block_extents[id(node)]
+        horizontal_extent = block_extents(node)
 
         inner_ctx = self.Context(
             axes=ctx.axes,
@@ -1176,7 +1176,8 @@ class DaceStrMaker:
             for decl in stencil.params + stencil.declarations
             if isinstance(decl, oir.FieldDecl)
         }
-        self.block_extents = compute_horizontal_block_extents(stencil)
+        self.block_extents = lambda he: compute_horizontal_block_extents(stencil)[id(he)]
+
         self.access_infos = compute_dcir_access_infos(
             stencil,
             oir_decls=self.decls,

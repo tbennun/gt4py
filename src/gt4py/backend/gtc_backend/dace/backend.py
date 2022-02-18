@@ -64,9 +64,12 @@ def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
                 for k, v in repldict.items():
                     if k in node.symbol_mapping:
                         node.symbol_mapping[k] = v
-    for k in repldict.keys():
+    for k, v in repldict.items():
         if k in sdfg.symbols:
             sdfg.remove_symbol(k)
+        for sym in getattr(v, "free_symbols", set()):
+            if str(sym) not in sdfg.symbols:
+                sdfg.add_symbol(str(sym), dace.int32)
 
 
 def post_expand_trafos(sdfg: dace.SDFG):
@@ -170,8 +173,7 @@ class GTCDaCeExtGenerator:
         sdfg = OirSDFGBuilder().visit(oir)
 
         to_device(sdfg, self.backend.storage_info["device"])
-
-        sdfg = expand_and_wrap_sdfg(gtir, sdfg, self.backend.storage_info["layout_map"])
+        specialize_transient_strides(sdfg, layout_map=self.backend.storage_info["layout_map"])
 
         for tmp_sdfg in sdfg.all_sdfgs_recursive():
             tmp_sdfg.transformation_hist = []
@@ -185,6 +187,19 @@ class GTCDaCeExtGenerator:
         )
 
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
+            sdfg = expand_and_wrap_sdfg(gtir, sdfg, self.backend.storage_info["layout_map"])
+
+            for tmp_sdfg in sdfg.all_sdfgs_recursive():
+                tmp_sdfg.transformation_hist = []
+                tmp_sdfg.orig_sdfg = None
+
+            sdfg.save(
+                self.backend.builder.module_path.joinpath(
+                    os.path.dirname(self.backend.builder.module_path),
+                    self.backend.builder.module_name + "_expanded.sdfg",
+                )
+            )
+
             with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
                 implementation = DaCeComputationCodegen.apply(
                     gtir, sdfg, self.backend.storage_info["layout_map"]

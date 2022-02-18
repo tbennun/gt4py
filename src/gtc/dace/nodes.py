@@ -52,10 +52,6 @@ class OIRLibraryNode(ABC, dace.nodes.LibraryNode):
     def as_oir(self):
         raise NotImplementedError("Implement in child class.")
 
-    # @abstractmethod
-    # def __eq__(self, other):
-    #     raise NotImplementedError("Implement in child class.")
-
     def to_json(self, parent):
         protocol = pickle.DEFAULT_PROTOCOL
         pbytes = pickle.dumps(self, protocol=protocol)
@@ -170,22 +166,6 @@ class VerticalLoopLibraryNode(OIRLibraryNode):
             caches=self.caches,
         )
 
-    # def __eq__(self, other):
-    #     try:
-    #         assert isinstance(other, VerticalLoopLibraryNode)
-    #         assert self.loop_order == other.loop_order
-    #         assert self.caches == other.caches
-    #         assert len(self.sections) == len(other.sections)
-    #         for (interval1, he_sdfg1), (interval2, he_sdfg2) in zip(self.sections, other.sections):
-    #             assert interval1 == interval2
-    #             assert_sdfg_equal(he_sdfg1, he_sdfg2)
-    #     except AssertionError:
-    #         return False
-    #     return True
-    #
-    # def __hash__(self):
-    #     return super(OIRLibraryNode, self).__hash__()
-
 
 @dataclass
 class PreliminaryHorizontalExecution:
@@ -240,14 +220,6 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
 
     def validate(self, parent_sdfg: dace.SDFG, parent_state: dace.SDFGState, *args, **kwargs):
         get_node_name_mapping(parent_state, self)
-
-    # def __eq__(self, other):
-    #     if not isinstance(other, HorizontalExecutionLibraryNode):
-    #         return False
-    #     return self.as_oir() == other.as_oir()
-    #
-    # def __hash__(self):
-    #     return super(OIRLibraryNode, self).__hash__()
 
     @property
     def free_symbols(self):
@@ -321,8 +293,14 @@ class StencilComputation(library.LibraryNode):
         super().__init__(name=name, *args, **kwargs)
 
         if oir_node is not None:
+
+            extents_dict = dict()
+            for i, section in enumerate(oir_node.sections):
+                for j, he in enumerate(section.horizontal_executions):
+                    extents_dict[i + j] = extents[id(he)]
+
             self.oir_node = oir_node
-            self.extents = extents
+            self.extents = extents_dict
             self.declarations = declarations
             if oir_node.loc is not None:
 
@@ -333,6 +311,12 @@ class StencilComputation(library.LibraryNode):
                     oir_node.loc.column,
                     oir_node.loc.source,
                 )
+
+    def get_extents(self, he):
+        for i, section in enumerate(self.oir_node.sections):
+            for j, cand_he in enumerate(section.horizontal_executions):
+                if he is cand_he:
+                    return self.extents[i + j]
 
     @property
     def field_decls(self) -> Dict[str, FieldDecl]:

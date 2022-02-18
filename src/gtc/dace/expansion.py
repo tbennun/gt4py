@@ -16,7 +16,7 @@
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import dace
 import dace.data
@@ -376,7 +376,7 @@ class DaCeIRBuilder(NodeTranslator):
     @dataclass
     class GlobalContext:
         library_node: StencilComputation
-        block_extents: Dict[int, Extent]
+        block_extents: Callable[[oir.HorizontalExecution], Extent]
         arrays: Dict[str, dace.data.Data]
 
         def get_dcir_decls(self, access_infos):
@@ -556,7 +556,7 @@ class DaCeIRBuilder(NodeTranslator):
         loop_order,
         **kwargs,
     ):
-        extent = global_ctx.block_extents[id(node)]
+        extent = global_ctx.block_extents(node)
         decls = [self.visit(decl) for decl in node.declarations]
         stmts = [self.visit(stmt) for stmt in node.body]
 
@@ -1221,13 +1221,13 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         # Solve for all at once
         results = sympy.solve(equations, *symbols, dict=True)
         result = results[0]
-        return {str(k)[len("__SOLVE_") :]: str(v) for k, v in result.items()}
+        result = {str(k)[len("__SOLVE_") :]: str(v) for k, v in result.items()}
+        return result
 
     @staticmethod
     def expansion(
         node: "StencilComputation", parent_state: dace.SDFGState, parent_sdfg: dace.SDFG
     ) -> dace.nodes.NestedSDFG:
-
         start, end = (
             node.oir_node.sections[0].interval.start,
             node.oir_node.sections[0].interval.end,
@@ -1242,14 +1242,23 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         )
         overall_extent = Extent.zeros(ndims=3)
         for he in node.oir_node.iter_tree().if_isinstance(oir.HorizontalExecution):
-            overall_extent = overall_extent.union(node.extents[id(he)])
+            overall_extent = overall_extent.union(node.get_extents(he))
         iteration_ctx = DaCeIRBuilder.IterationContext(
             grid_subset=dcir.GridSubset.from_gt4py_extent(overall_extent).set_interval(
                 axis=dcir.Axis.K, interval=overall_interval
             )
         )
+
+        parent_arrays = dict()
+        for edge in parent_state.in_edges(node):
+            if edge.dst_conn is not None:
+                parent_arrays[edge.dst_conn[len("IN_") :]] = parent_sdfg.arrays[edge.data.data]
+        for edge in parent_state.out_edges(node):
+            if edge.src_conn is not None:
+                parent_arrays[edge.src_conn[len("OUT_") :]] = parent_sdfg.arrays[edge.data.data]
+
         daceir_builder_global_ctx = DaCeIRBuilder.GlobalContext(
-            library_node=node, block_extents=node.extents, arrays=parent_sdfg.arrays
+            library_node=node, block_extents=node.get_extents, arrays=parent_arrays
         )
 
         daceir: dcir.StateMachine = DaCeIRBuilder().visit(
@@ -1281,9 +1290,11 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         for edge in parent_state.out_edges(node):
             edge.data.subset = subsets[edge.src_conn]
 
-        nsdfg.symbol_mapping.update(
-            **StencilComputationExpansion._solve_for_domain(daceir.field_decls, subsets)
-        )
+        symbol_mapping = StencilComputationExpansion._solve_for_domain(daceir.field_decls, subsets)
+        if "__K" in nsdfg.sdfg.free_symbols and "__K" not in symbol_mapping:
+            symbol_mapping["__K"] = 0
+        nsdfg.symbol_mapping.update(**symbol_mapping)
+
         for sym in nsdfg.free_symbols:
             if str(sym) not in parent_sdfg.symbols:
                 parent_sdfg.add_symbol(str(sym), stype=dace.int32)
