@@ -22,7 +22,6 @@ from dace.sdfg.utils import fuse_states, inline_sdfgs
 from dace.serialize import dumps
 from dace.transformation.dataflow import MapCollapse
 
-import gt4py.definitions
 from eve import NodeVisitor, codegen
 from eve.codegen import MakoTemplate as as_mako
 from gt4py import backend as gt_backend
@@ -30,7 +29,6 @@ from gt4py import gt_src_manager
 from gt4py.backend import BaseGTBackend, CLIBackendMixin, make_args_data_from_gtir
 from gt4py.backend.gt_backends import (
     GTCUDAPyModuleGenerator,
-    cuda_is_compatible_layout,
     cuda_is_compatible_type,
     make_cuda_layout_map,
 )
@@ -75,6 +73,7 @@ def post_expand_trafos(sdfg: dace.SDFG):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
     sdfg.simplify()
+    sdfg.apply_transformations_repeated(MapCollapse, validate=False, permissive=False)
     state = sdfg.node(0)
     sdict = state.scope_children()
     for mapnode in sdict[None]:
@@ -157,13 +156,15 @@ class GTCDaCeExtGenerator:
         base_oir = gtir_to_oir.GTIRToOIR().visit(gtir)
         oir_pipeline = self.backend.builder.options.backend_opts.get(
             "oir_pipeline",
-            DefaultPipeline(
-                skip=[
-                    GreedyMerging,
-                    MaskInlining,
-                    FillFlushToLocalKCaches,
-                ]
-            ),
+            DefaultPipeline(),
+        )
+        oir_pipeline = DefaultPipeline(
+            skip=oir_pipeline.skip
+            + [
+                GreedyMerging,
+                MaskInlining,
+                FillFlushToLocalKCaches,
+            ]
         )
         oir = oir_pipeline.run(base_oir)
         sdfg = OirSDFGBuilder().visit(oir)

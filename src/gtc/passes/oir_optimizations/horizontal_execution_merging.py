@@ -125,11 +125,10 @@ class OnTheFlyMerging(NodeTranslator):
     def visit_ScalarAccess(
         self, node: oir.ScalarAccess, *, scalar_map: Dict[str, str], **kwargs: Any
     ) -> oir.ScalarAccess:
-        if node.name in scalar_map:
-            name = scalar_map[node.name]
-        else:
-            name = node.name
-        return oir.ScalarAccess(name=name, dtype=node.dtype)
+        return oir.ScalarAccess(
+            name=scalar_map[node.name] if node.name in scalar_map else node.name,
+            dtype=node.dtype,
+        )
 
     def _merge(
         self,
@@ -306,22 +305,17 @@ class OnTheFlyMerging(NodeTranslator):
         )
 
     def visit_Stencil(self, node: oir.Stencil, **kwargs: Any) -> oir.Stencil:
-        vertical_loops: List[oir.VerticalLoop] = []
         protected_fields = set(n.name for n in node.params)
-        all_names = collect_symbol_names(node)
-        vertical_loops = [
-            *reversed(
-                [
-                    self.visit(
-                        vl,
-                        new_symbol_name=symbol_name_creator(all_names),
-                        protected_fields=protected_fields,
-                        **kwargs,
-                    )
-                    for vl in reversed(node.vertical_loops)
-                ]
+        new_symbol_name = symbol_name_creator(collect_symbol_names(node))
+        vertical_loops = []
+        for vl in reversed(node.vertical_loops):
+            vl = self.visit(
+                vl, new_symbol_name=new_symbol_name, protected_fields=protected_fields, **kwargs
             )
-        ]
+            vertical_loops.append(vl)
+            protected_fields |= AccessCollector.apply(vl).read_fields()
+        vertical_loops = list(reversed(vertical_loops))
+
         accessed = AccessCollector.apply(vertical_loops).fields()
         return oir.Stencil(
             name=node.name,
