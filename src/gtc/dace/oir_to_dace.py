@@ -880,6 +880,6 @@ class OirSDFGBuilder(eve.NodeVisitor):
                 transient=True,
             )
         self.generic_visit(node, ctx=ctx, block_extents=block_extents)
-        fuse_states(sdfg, permissive=False, progress=False)
+        # fuse_states(sdfg, permissive=False, progress=False)
         ctx.sdfg.validate()
         return ctx.sdfg

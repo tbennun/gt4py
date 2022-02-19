@@ -765,7 +765,7 @@ class StencilObject(abc.ABC, dace.frontend.python.common.SDFGConvertible):
     def __sdfg__(self, *args, **kwargs) -> dace.SDFG:
         norm_kwargs = self._normalize_args(*args, **kwargs)
         frozen_stencil = self.freeze(origin=norm_kwargs["origin"], domain=norm_kwargs["domain"])
-        return frozen_stencil.__sdfg__(*args, **kwargs)
+        return frozen_stencil.__sdfg__(**norm_kwargs)
 
     def __sdfg_closure__(self, reevaluate: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         return {}

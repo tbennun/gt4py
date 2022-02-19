@@ -1289,13 +1289,13 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
             edge.data.subset = subsets[edge.dst_conn]
         for edge in parent_state.out_edges(node):
             edge.data.subset = subsets[edge.src_conn]
-
         symbol_mapping = StencilComputationExpansion._solve_for_domain(daceir.field_decls, subsets)
         if "__K" in nsdfg.sdfg.free_symbols and "__K" not in symbol_mapping:
             symbol_mapping["__K"] = 0
-        nsdfg.symbol_mapping.update(**symbol_mapping)
+        nsdfg.symbol_mapping.update({**symbol_mapping, **node.symbol_mapping})
 
-        for sym in nsdfg.free_symbols:
-            if str(sym) not in parent_sdfg.symbols:
-                parent_sdfg.add_symbol(str(sym), stype=dace.int32)
+        # for sym in nsdfg.free_symbols:
+        #     if str(sym) not in parent_sdfg.symbols:
+        #         parent_sdfg.add_symbol(str(sym), stype=dace.int32)
+
         return nsdfg

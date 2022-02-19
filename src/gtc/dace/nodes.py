@@ -28,6 +28,7 @@ import networkx as nx
 from dace import library
 
 from gt4py.definitions import Extent
+from gtc import daceir as dcir
 from gtc import oir
 from gtc.common import DataType, LoopOrder, VariableKOffset, typestr_to_data_type
 from gtc.dace.utils import (
@@ -279,6 +280,9 @@ class StencilComputation(library.LibraryNode):
         setter=set_expansion_order,
     )
 
+    symbol_mapping = dace.properties.DictProperty(
+        key_type=str, value_type=object, default=None, allow_none=True
+    )
     _dace_library_name = "StencilComputation"
 
     def __init__(
@@ -297,11 +301,19 @@ class StencilComputation(library.LibraryNode):
             extents_dict = dict()
             for i, section in enumerate(oir_node.sections):
                 for j, he in enumerate(section.horizontal_executions):
-                    extents_dict[i + j] = extents[id(he)]
+                    extents_dict[j * len(oir_node.sections) + i] = extents[id(he)]
 
             self.oir_node = oir_node
             self.extents = extents_dict
             self.declarations = declarations
+            self.symbol_mapping = {
+                decl.name: decl.name
+                for decl in declarations.values()
+                if isinstance(decl, oir.ScalarDecl)
+            }
+            self.symbol_mapping.update(
+                {axis.domain_symbol(): axis.domain_symbol() for axis in dcir.Axis.dims_3d()}
+            )
             if oir_node.loc is not None:
 
                 self.debuginfo = dace.dtypes.DebugInfo(
@@ -316,7 +328,7 @@ class StencilComputation(library.LibraryNode):
         for i, section in enumerate(self.oir_node.sections):
             for j, cand_he in enumerate(section.horizontal_executions):
                 if he is cand_he:
-                    return self.extents[i + j]
+                    return self.extents[j * len(self.oir_node.sections) + i]
 
     @property
     def field_decls(self) -> Dict[str, FieldDecl]:

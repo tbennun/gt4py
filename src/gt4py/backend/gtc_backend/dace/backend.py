@@ -142,6 +142,7 @@ def expand_and_wrap_sdfg(
     for array in sdfg.arrays.values():
         if array.transient:
             array.lifetime = dace.AllocationLifetime.Persistent
+    sdfg.simplify()
     sdfg.expand_library_nodes(recursive=True)
     specialize_transient_strides(sdfg, layout_map=layout_map)
     post_expand_trafos(sdfg)
@@ -179,12 +180,9 @@ class GTCDaCeExtGenerator:
             tmp_sdfg.transformation_hist = []
             tmp_sdfg.orig_sdfg = None
 
-        sdfg.save(
-            self.backend.builder.module_path.joinpath(
-                os.path.dirname(self.backend.builder.module_path),
-                self.backend.builder.module_name + ".sdfg",
-            )
-        )
+        json_sdfgs = {
+            self.backend.builder.module_name + ".sdfg": dumps(sdfg.to_json()),
+        }
 
         if not self.backend.builder.options.backend_opts.get("disable_code_generation", False):
             sdfg = expand_and_wrap_sdfg(gtir, sdfg, self.backend.storage_info["layout_map"])
@@ -192,13 +190,6 @@ class GTCDaCeExtGenerator:
             for tmp_sdfg in sdfg.all_sdfgs_recursive():
                 tmp_sdfg.transformation_hist = []
                 tmp_sdfg.orig_sdfg = None
-
-            sdfg.save(
-                self.backend.builder.module_path.joinpath(
-                    os.path.dirname(self.backend.builder.module_path),
-                    self.backend.builder.module_name + "_expanded.sdfg",
-                )
-            )
 
             with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
                 implementation = DaCeComputationCodegen.apply(
@@ -212,6 +203,7 @@ class GTCDaCeExtGenerator:
 
             computation = {"computation.hpp": implementation}
             bindings = {"bindings" + bindings_ext: bindings}
+            json_sdfgs[self.backend.builder.module_name + "_expanded.sdfg"] = dumps(sdfg.to_json())
         else:
             computation = dict()
             bindings = dict()
@@ -219,9 +211,7 @@ class GTCDaCeExtGenerator:
         return {
             "computation": computation,
             "bindings": bindings,
-            "info": {
-                self.backend.builder.module_name + ".sdfg": dumps(sdfg.to_json()),
-            },
+            "info": json_sdfgs,
         }
 
     def _post_process_code(self, implementation: str) -> str:
