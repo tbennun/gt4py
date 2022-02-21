@@ -260,3 +260,51 @@ def run_large_k_interval(backend, id_version, domain):
 @pytest.mark.parametrize("function", REGISTRY)
 def test_cpp_regression(backend, id_version, function):
     function(gt_backend.from_name(backend), id_version)
+
+
+#
+# @pytest.fixture
+# def expansion_orders():
+#     testmodule = generate_test_module(
+#         "horizontal_diffusion", "gtc:dace", id_version=id_version, rebuild=False
+#     )
+#     library_node = testmodule.sdfg.all_nodes_recursive()
+#
+#
+# @pytest.mark.parametrize("expansion_order", expansion_orders)
+# def test_all_expansions(expansion_order):
+#     @register
+#     @hyp.given(domain=hyp_st.tuples(*([hyp_st.integers(min_value=1, max_value=8)] * 3)))
+#     def run_horizontal_diffusion(backend, id_version, domain):
+#
+#         validate_field_names = ["out_field"]
+#         origins = {"in_field": (2, 2, 0), "out_field": (0, 0, 0), "coeff": (0, 0, 0)}
+#         shapes = {
+#             name: tuple(domain[i] + 2 * origin[i] for i in range(3)) for name, origin in origins.items()
+#         }
+#         name = "horizontal_diffusion"
+#
+#         arg_fields = get_reference(name, backend, domain, origins, shapes)
+#         validate_fields = {
+#             name + "_reference": arg_fields.pop(name + "_reference") for name in validate_field_names
+#         }
+#
+#         testmodule = generate_test_module(
+#             "horizontal_diffusion", backend, id_version=id_version, rebuild=False
+#         )
+#         for k in arg_fields:
+#             if hasattr(arg_fields[k], "host_to_device"):
+#                 arg_fields[k].host_to_device()
+#         testmodule.run(
+#             **arg_fields,
+#             _domain_=domain,
+#             _origin_=origins,
+#             exec_info=None,
+#         )
+#
+#         for k in validate_field_names:
+#             if hasattr(arg_fields[k], "synchronize"):
+#                 arg_fields[k].device_to_host(force=True)
+#             np.testing.assert_allclose(
+#                 arg_fields[k].view(np.ndarray), validate_fields[k + "_reference"].view(np.ndarray)
+#             )

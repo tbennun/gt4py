@@ -34,7 +34,13 @@ from eve.codegen import MakoTemplate as as_mako
 from gt4py import definitions as gt_def
 from gt4py.definitions import Extent
 from gtc import daceir as dcir
-from gtc.dace.nodes import StencilComputation
+from gtc.dace.nodes import (
+    StencilComputation,
+    get_expansion_order_axis,
+    get_expansion_order_index,
+    is_domain_loop,
+    is_domain_map,
+)
 from gtc.dace.utils import get_axis_bound_str, get_tasklet_symbol
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
@@ -518,6 +524,7 @@ class DaCeIRBuilder(NodeTranslator):
     def _add_tiling_map(
         self,
         *dcir_nodes: eve.Node,
+        tiling_axes,
         global_ctx: "DaCeIRBuilder.GlobalContext",
     ):
         from .utils import union_node_access_infos, union_node_grid_subsets, untile_access_info_dict
@@ -525,8 +532,9 @@ class DaCeIRBuilder(NodeTranslator):
         grid_subset = union_node_grid_subsets(list(dcir_nodes))
         read_accesses, write_accesses, _ = union_node_access_infos(list(dcir_nodes))
         computations = self.to_dataflow(dcir_nodes, global_ctx=global_ctx)
-        for axis, tile_size in global_ctx.library_node.tile_sizes.items():
-            axis = dcir.Axis(axis)
+        for axis in tiling_axes:
+            axis = get_expansion_order_axis(axis)
+            tile_size = global_ctx.library_node.tile_sizes[str(axis)]
             grid_subset = grid_subset.untile(axis)
             read_accesses = untile_access_info_dict(read_accesses, axes=[axis])
             write_accesses = untile_access_info_dict(write_accesses, axes=[axis])
@@ -564,8 +572,14 @@ class DaCeIRBuilder(NodeTranslator):
             dcir.Axis.K, iteration_ctx.grid_subset.intervals[dcir.Axis.K]
         )
 
-        if "Tiling" in expansion_order:
-            local_subset = domain_subset.tile(global_ctx.library_node.tile_sizes)
+        tile_axes = {
+            get_expansion_order_axis(item)
+            for item in expansion_order[: global_ctx.library_node.expansion_order.index("Sections")]
+        }
+        if tile_axes:
+            local_subset = domain_subset.tile(
+                {k: v for k, v in global_ctx.library_node.tile_sizes.items() if k in tile_axes}
+            )
         else:
             local_subset = domain_subset
 
@@ -589,20 +603,29 @@ class DaCeIRBuilder(NodeTranslator):
             write_accesses=tasklet_write_accesses,
         )
 
-        for axis in reversed(expansion_order):
-            if axis not in set(dcir.Axis.dims_3d()):
+        for item in reversed(expansion_order):
+            if not is_domain_map(item) and not is_domain_loop(item):
                 break
-            axis = dcir.Axis(axis)
+            axis = get_expansion_order_axis(item)
             interval = local_subset.intervals[axis]
             grid_subset = grid_subset.set_interval(axis, interval)
-            dcir_node = self._add_domain_iteration(
-                dcir_node,
-                axis=axis,
-                interval=interval,
-                grid_subset=grid_subset,
-                loop_order=loop_order,
-                global_ctx=global_ctx,
-            )
+            if is_domain_map(item):
+                dcir_node = self._add_domain_map(
+                    dcir_node,
+                    axis=axis,
+                    interval=interval,
+                    grid_subset=grid_subset,
+                    global_ctx=global_ctx,
+                )
+            else:
+                dcir_node = self._add_domain_loop(
+                    dcir_node,
+                    axis=axis,
+                    interval=interval,
+                    grid_subset=grid_subset,
+                    loop_order=loop_order,
+                )
+
         return dcir_node
 
     def visit_VerticalLoopSection(
@@ -617,7 +640,9 @@ class DaCeIRBuilder(NodeTranslator):
     ):
         section_iteration_ctx = iteration_ctx.restricted_to_interval(dcir.Axis.K, node.interval)
 
-        if expansion_order.index("K") < expansion_order.index("Stages"):
+        if get_expansion_order_index(expansion_order, "K") < get_expansion_order_index(
+            expansion_order, "Stages"
+        ):
             inner_iteration_ctx = section_iteration_ctx.restricted_grid_subset(dcir.Axis.K)
         else:
             inner_iteration_ctx = section_iteration_ctx
@@ -638,7 +663,9 @@ class DaCeIRBuilder(NodeTranslator):
                 grid_subset=he.grid_subset,
             )
         ]
-        if expansion_order.index("K") < expansion_order.index("Stages"):
+        if get_expansion_order_index(expansion_order, "K") < get_expansion_order_index(
+            expansion_order, "Stages"
+        ):
             return self._add_domain_iteration(
                 *scope_nodes,
                 axis=dcir.Axis.K,
@@ -732,11 +759,14 @@ class DaCeIRBuilder(NodeTranslator):
                 **kwargs,
             )
         )
-
-        if "Tiling" in global_ctx.library_node.expansion_order:
+        expansion_order = global_ctx.library_node.expansion_order
+        tiling_axes = expansion_order[: global_ctx.library_node.expansion_order.index("Sections")]
+        if tiling_axes:
             computations = [
                 self._add_tiling_map(
-                    self.to_dataflow(computations, global_ctx=global_ctx), global_ctx=global_ctx
+                    self.to_dataflow(computations, global_ctx=global_ctx),
+                    global_ctx=global_ctx,
+                    tiling_axes=tiling_axes,
                 )
             ]
 

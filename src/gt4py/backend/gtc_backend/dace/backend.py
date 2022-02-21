@@ -170,7 +170,8 @@ class GTCDaCeExtGenerator:
                 FillFlushToLocalKCaches,
             ]
         )
-        oir = oir_pipeline.run(base_oir)
+        # oir = oir_pipeline.run(base_oir)
+        oir = base_oir
         sdfg = OirSDFGBuilder().visit(oir)
 
         to_device(sdfg, self.backend.storage_info["device"])
@@ -320,6 +321,7 @@ class DaCeComputationCodegen:
     @classmethod
     def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
         self = cls()
+        sdfg.view()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")

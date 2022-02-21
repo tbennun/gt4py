@@ -28,6 +28,10 @@ class Axis(StrEnum):
         yield from [Axis.I, Axis.J, Axis.K]
 
     @staticmethod
+    def dims_horizontal():
+        yield from [Axis.I, Axis.J]
+
+    @staticmethod
     def horizontal_axes():
         yield from [Axis.I, Axis.J]
 

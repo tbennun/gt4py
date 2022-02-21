@@ -18,6 +18,7 @@ import base64
 import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from itertools import combinations, permutations, product
 from typing import Dict, List, Tuple, Union
 
 import dace.data
@@ -28,6 +29,7 @@ import networkx as nx
 from dace import library
 
 from gt4py.definitions import Extent
+from gtc import common
 from gtc import daceir as dcir
 from gtc import oir
 from gtc.common import DataType, LoopOrder, VariableKOffset, typestr_to_data_type
@@ -230,20 +232,71 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
         return res
 
 
+def get_expansion_order_axis(item):
+    if is_domain_map(item) or is_domain_loop(item):
+        return dcir.Axis(item[0])
+    elif is_tiling(item):
+        return dcir.Axis(item[-1])
+    else:
+        return dcir.Axis(item)
+
+
+def is_domain_map(item):
+    return any(f"{axis}Map" == item for axis in dcir.Axis.dims_3d())
+
+
+def is_domain_loop(item):
+    return any(f"{axis}Loop" == item for axis in dcir.Axis.dims_3d())
+
+
+def is_tiling(item):
+    return any(f"Tile{axis}" == item for axis in dcir.Axis.dims_3d())
+
+
+def get_expansion_order_index(expansion_order, item):
+    if f"{item}Map" in expansion_order:
+        return expansion_order.index(f"{item}Map")
+    elif f"{item}Loop" in expansion_order:
+        return expansion_order.index(f"{item}Loop")
+    else:
+        return expansion_order.index(str(item))
+
+
+def _is_expansion_order_implemented(expansion_order):
+    if "TileK" in expansion_order:
+        return False
+    for axis in dcir.Axis.dims_horizontal():
+        if f"Tile{axis}" in expansion_order and expansion_order.index(
+            f"Tile{axis}"
+        ) > expansion_order.index("Sections"):
+            return False
+
+    # TODO: Could have single IJ map with predicates in K, e.g. also for tiling??
+    if not get_expansion_order_index(expansion_order, dcir.Axis.K) > expansion_order.index(
+        "Sections"
+    ):
+        return False
+
+    # TODO: ij iteration outside of sections in special cases (possibly with predicate)
+    if not all(
+        get_expansion_order_index(expansion_order, axis) > expansion_order.index("Stages")
+        for axis in dcir.Axis.dims_horizontal()
+    ):
+        return False
+    return True
+
+
 def set_expansion_order(self, expansion_order):
-    if not set(StencilComputation.expansion_order.default) == set(expansion_order) or not len(
-        StencilComputation.expansion_order.default
-    ) == len(expansion_order):
-        raise ValueError(
-            "StencilComputation.expansion_order must be a permutation of"
-            + str(StencilComputation.expansion_order.default)
-        )
-    if expansion_order.index("K") < expansion_order.index("Sections"):
-        raise ValueError("K iteration must be per section.")
-    if any(expansion_order.index(ij) < expansion_order.index("Stages") for ij in "IJ"):
-        raise ValueError("I and J iteration must be per stage.")
-    if expansion_order.index("Stages") < expansion_order.index("Sections"):
-        raise ValueError("Stages are per-section")
+    if expansion_order is None:
+        self._expansion_order = None
+        return
+
+    if not _is_expansion_order_implemented(expansion_order):
+        raise ValueError("Provided StencilComputation.expansion_order is not supported.")
+    if self.oir_node is not None:
+        if not self.is_valid_expansion_order(expansion_order):
+            raise ValueError("Provided StencilComputation.expansion_order is invalid.")
+        expansion_order = list(self._sanitize_expansion_item(eo) for eo in expansion_order)
     self._expansion_order = list(str(eo) for eo in expansion_order)
 
 
@@ -253,6 +306,7 @@ class StencilComputation(library.LibraryNode):
     default_implementation = "default"
 
     oir_node = dace.properties.DataclassProperty(dtype=VerticalLoop, default=None, allow_none=True)
+
     declarations = dace.properties.DictProperty(
         key_type=str, value_type=Decl, default=None, allow_none=True
     )
@@ -263,19 +317,8 @@ class StencilComputation(library.LibraryNode):
         key_type=str, value_type=int, default={"I": 8, "J": 8}, allow_none=True
     )
     expansion_order = dace.properties.ListProperty(
-        desc="""
-        currently supported:
-         ["Sections", "Stages", "I", "J", "K"]
-         ["Sections", "Stages", "I", "K", "J"]
-         ["Sections", "Stages", "J", "I", "K"]
-         ["Sections", "Stages", "J", "K", "I"]
-         ["Sections", "Stages", "K", "I", "J"]
-         ["Sections", "Stages", "K", "J", "I"]
-         ["Sections", "K", "Stages", "I", "J"]
-         ["Sections", "K", "Stages", "J", "I"]
-        """,
         element_type=str,
-        default=["Tiling", "Sections", "K", "Stages", "J", "I"],
+        default=["TileJ", "TileI", "Sections", "K", "Stages", "J", "I"],
         allow_none=False,
         setter=set_expansion_order,
     )
@@ -323,6 +366,8 @@ class StencilComputation(library.LibraryNode):
                     oir_node.loc.column,
                     oir_node.loc.source,
                 )
+            assert self.oir_node is not None
+            set_expansion_order(self, self._expansion_order)
 
     def get_extents(self, he):
         for i, section in enumerate(self.oir_node.sections):
@@ -355,3 +400,69 @@ class StencilComputation(library.LibraryNode):
             b64string = json_obj["attributes"]["pickle"]
         byte_repr = base64.b64decode(b64string)
         return pickle.loads(byte_repr)
+
+    def _sanitize_expansion_item(self, eo):
+        if any(eo == axis for axis in dcir.Axis.dims_horizontal()):
+            return f"{eo}Map"
+        if eo == dcir.Axis.K:
+            if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
+                return f"{eo}Map"
+            else:
+                return f"{eo}Loop"
+        return eo
+
+    def is_valid_expansion_order(self, expansion_order):
+        expansion_order = list(self._sanitize_expansion_item(eo) for eo in expansion_order)
+        return any(expansion_order == cand for cand in self.valid_expansion_orders())
+
+    def valid_expansion_orders(self):
+        # Putting K inside of i or j is valid if
+        # * K parallel
+        # * TODO: All reads with k-offset to values modified in same HorizontalExecution are not
+        #   to fields that are also accessed horizontally (in I or J, respectively) horizontal as
+        #   well (else, race condition in other column)
+        # Putting K inside of stages is valid if
+        # * K parallel
+        # * TODO: not "ahead" in order of iteration to fields that are modified in previous
+        #   HorizontalExecutions (else, reading updated values that should be old)
+        if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
+            k_inside_dims = {dcir.Axis.I, dcir.Axis.J}
+            k_inside_stages = True
+        else:
+            k_inside_dims = {}
+            k_inside_stages = False
+
+        get_dim_idx = lambda axis: get_expansion_order_index(expansion_order, axis)
+
+        def is_expansion_order_valid(expansion_order):
+
+            if "KMap" in expansion_order and self.oir_node.loop_order != common.LoopOrder.PARALLEL:
+                return False
+            if expansion_order.index("Stages") < expansion_order.index("Sections"):
+                return False
+            for axis in dcir.Axis.dims_horizontal():
+                if get_dim_idx(axis) < get_dim_idx(dcir.Axis.K) and axis not in k_inside_dims:
+                    return False
+            if expansion_order.index("Stages") < get_dim_idx(dcir.Axis.K) and not k_inside_stages:
+                return False
+            return _is_expansion_order_implemented(expansion_order)
+
+        def expansion_subsets():
+            optionals = {"TileI", "TileJ"}  # ToDo: Implement TileK
+            required = {
+                "Sections",
+                ("KMap", "KLoop"),  # tuple represents "one of"
+                "Stages",
+                ("JMap", "JLoop"),
+                ("IMap", "ILoop"),
+            }
+
+            for k in range(len(optionals) + 1):
+                for subset in combinations(optionals, k):
+                    subset = {s if isinstance(s, tuple) else (s,) for s in set(subset) | required}
+                    yield from product(*subset)
+
+        for expansion_subset in expansion_subsets():
+            for expansion_order in permutations(expansion_subset):
+                if is_expansion_order_valid(expansion_order):
+                    yield list(str(eo) for eo in expansion_order)
