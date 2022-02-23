@@ -37,7 +37,11 @@ from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
 from gtc import gtir, gtir_to_oir
 from gtc.common import CartesianOffset, LevelMarker
-from gtc.dace.nodes import HorizontalExecutionLibraryNode, VerticalLoopLibraryNode
+from gtc.dace.nodes import (
+    HorizontalExecutionLibraryNode,
+    StencilComputation,
+    VerticalLoopLibraryNode,
+)
 from gtc.dace.oir_to_dace import OirSDFGBuilder
 from gtc.dace.utils import array_dimensions, replace_strides
 from gtc.passes.gtir_legacy_extents import compute_legacy_extents
@@ -127,6 +131,19 @@ def to_device(sdfg: dace.SDFG, device):
                 node.tile_sizes = [8, 8]
 
 
+def pre_expand_trafos(sdfg: dace.SDFG):
+    while inline_sdfgs(sdfg) or fuse_states(sdfg):
+        pass
+    sdfg.simplify()
+    for node, _ in sdfg.all_nodes_recursive():
+        if isinstance(node, StencilComputation):
+            try:
+                node.expansion_order = ["TileI", "TileJ", "Sections", "K", "Stages", "I", "J"]
+                # node.expansion_order = ["TileI", "TileJ", "Sections", "Stages", "I", "J", "K"]
+            except ValueError:
+                node.expansion_order = ["TileI", "TileJ", "Sections", "K", "Stages", "I", "J"]
+
+
 def expand_and_wrap_sdfg(
     gtir: gtir.Stencil, sdfg: dace.SDFG, layout_map
 ) -> dace.SDFG:  # noqa: C901
@@ -170,11 +187,11 @@ class GTCDaCeExtGenerator:
                 FillFlushToLocalKCaches,
             ]
         )
-        # oir = oir_pipeline.run(base_oir)
-        oir = base_oir
+        oir = oir_pipeline.run(base_oir)
         sdfg = OirSDFGBuilder().visit(oir)
 
         to_device(sdfg, self.backend.storage_info["device"])
+        pre_expand_trafos(sdfg)
         specialize_transient_strides(sdfg, layout_map=self.backend.storage_info["layout_map"])
 
         for tmp_sdfg in sdfg.all_sdfgs_recursive():
@@ -321,7 +338,6 @@ class DaCeComputationCodegen:
     @classmethod
     def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
         self = cls()
-        sdfg.view()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")

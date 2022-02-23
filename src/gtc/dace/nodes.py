@@ -322,6 +322,7 @@ class StencilComputation(library.LibraryNode):
         allow_none=False,
         setter=set_expansion_order,
     )
+    # device = dace.properties.EnumProperty(dtype=dace.DeviceType, default=dace.DeviceType.CPU, allow_none=True) #TODO: Honor this
 
     symbol_mapping = dace.properties.DictProperty(
         key_type=str, value_type=object, default=None, allow_none=True
@@ -411,7 +412,7 @@ class StencilComputation(library.LibraryNode):
                 return f"{eo}Loop"
         return eo
 
-    def is_valid_expansion_order(self, expansion_order):
+    def is_valid_expansion_order(self, expansion_order: List[str]) -> bool:
         expansion_order = list(self._sanitize_expansion_item(eo) for eo in expansion_order)
         return any(expansion_order == cand for cand in self.valid_expansion_orders())
 
@@ -466,3 +467,7 @@ class StencilComputation(library.LibraryNode):
             for expansion_order in permutations(expansion_subset):
                 if is_expansion_order_valid(expansion_order):
                     yield list(str(eo) for eo in expansion_order)
+
+    #
+    # def __hash__(self):#TODO
+    #     pass
