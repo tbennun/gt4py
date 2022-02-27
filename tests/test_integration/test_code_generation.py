@@ -102,6 +102,7 @@ def test_ignore_np_errstate():
         setup_and_run(backend="numpy", ignore_np_errstate=False)
 
 
+@pytest.mark.xfail
 @pytest.mark.parametrize("backend", CPU_BACKENDS)
 def test_stencil_without_effect(backend):
     def definition1(field_in: gtscript.Field[np.float_]):

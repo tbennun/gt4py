@@ -149,7 +149,8 @@ def get_axis_bound_str(axis_bound, var_name):
 
 def get_interval_range_str(interval, var_name):
     return "{}:{}".format(
-        get_axis_bound_str(interval.start, var_name), get_axis_bound_str(interval.end, var_name)
+        get_axis_bound_str(interval.start, var_name),
+        get_axis_bound_str(interval.end, var_name),
     )
 
 
@@ -171,7 +172,8 @@ def get_axis_bound_diff_str(axis_bound1, axis_bound2, var_name: str):
 def get_interval_length_str(interval, var_name):
 
     return "({})-({})".format(
-        get_axis_bound_str(interval.end, var_name), get_axis_bound_str(interval.start, var_name)
+        get_axis_bound_str(interval.end, var_name),
+        get_axis_bound_str(interval.start, var_name),
     )
 
 
@@ -427,11 +429,19 @@ class CartesianIJIndexSpace(tuple):
         return CartesianIJIndexSpace(res)
 
     @staticmethod
-    def from_iteration_space(iteration_space: CartesianIterationSpace) -> "CartesianIJIndexSpace":
+    def from_iteration_space(
+        iteration_space: CartesianIterationSpace,
+    ) -> "CartesianIJIndexSpace":
         return CartesianIJIndexSpace(
             (
-                (iteration_space.i_interval.start.offset, iteration_space.i_interval.end.offset),
-                (iteration_space.j_interval.start.offset, iteration_space.j_interval.end.offset),
+                (
+                    iteration_space.i_interval.start.offset,
+                    iteration_space.i_interval.end.offset,
+                ),
+                (
+                    iteration_space.j_interval.start.offset,
+                    iteration_space.j_interval.end.offset,
+                ),
             )
         )
 
@@ -495,7 +505,9 @@ def iteration_to_access_space(iteration_space: CartesianIJIndexSpace, access: Ge
     return CartesianIJIndexSpace(res)
 
 
-def oir_iteration_space_computation(stencil: oir.Stencil) -> Dict[int, CartesianIterationSpace]:
+def oir_iteration_space_computation(
+    stencil: oir.Stencil,
+) -> Dict[int, CartesianIterationSpace]:
     iteration_spaces = dict()
 
     offsets: Dict[str, List[CartesianOffset]] = dict()
@@ -531,7 +543,9 @@ def oir_iteration_space_computation(stencil: oir.Stencil) -> Dict[int, Cartesian
     return iteration_spaces
 
 
-def oir_field_boundary_computation(stencil: oir.Stencil) -> Dict[str, CartesianIterationSpace]:
+def oir_field_boundary_computation(
+    stencil: oir.Stencil,
+) -> Dict[str, CartesianIterationSpace]:
     offsets: Dict[str, List[CartesianOffset]] = dict()
     access_spaces: Dict[str, CartesianIterationSpace] = dict()
     iteration_spaces = oir_iteration_space_computation(stencil)
@@ -608,11 +622,17 @@ def nodes_extent_calculation(
 
                     access_extent = [
                         (
-                            min(0, iteration_space.i_interval.start.offset + acc.offset[0]),
+                            min(
+                                0,
+                                iteration_space.i_interval.start.offset + acc.offset[0],
+                            ),
                             max(0, iteration_space.i_interval.end.offset + acc.offset[0]),
                         ),
                         (
-                            min(0, iteration_space.j_interval.start.offset + acc.offset[1]),
+                            min(
+                                0,
+                                iteration_space.j_interval.start.offset + acc.offset[1],
+                            ),
                             max(0, iteration_space.j_interval.end.offset + acc.offset[1]),
                         ),
                     ]
@@ -718,7 +738,8 @@ class IntervalMapping:
             if nextidx < len(self.interval_starts) and (
                 key.intersects(
                     oir.Interval(
-                        start=self.interval_starts[nextidx], end=self.interval_ends[nextidx]
+                        start=self.interval_starts[nextidx],
+                        end=self.interval_ends[nextidx],
                     )
                 )
                 or self.interval_starts[nextidx] == key.end
@@ -813,7 +834,12 @@ def assert_sdfg_equal(sdfg1: dace.SDFG, sdfg2: dace.SDFG) -> bool:
         n1 = n1["node"]
         n2 = n2["node"]
         if not isinstance(
-            n1, (dace.nodes.AccessNode, VerticalLoopLibraryNode, HorizontalExecutionLibraryNode)
+            n1,
+            (
+                dace.nodes.AccessNode,
+                VerticalLoopLibraryNode,
+                HorizontalExecutionLibraryNode,
+            ),
         ):
             raise TypeError
 
@@ -927,6 +953,7 @@ class AccessInfoCollector(NodeVisitor):
             block_extents=block_extents,
             ctx=inner_ctx,
             grid_subset=grid_subset,
+            k_interval=node.interval,
             **kwargs,
         )
         inner_infos = inner_ctx.access_infos
@@ -949,6 +976,7 @@ class AccessInfoCollector(NodeVisitor):
         *,
         block_extents,
         ctx: Context,
+        k_interval,
         grid_subset=None,
         **kwargs,
     ) -> Dict[str, "dcir.FieldAccessInfo"]:
@@ -961,12 +989,13 @@ class AccessInfoCollector(NodeVisitor):
         )
         inner_infos = inner_ctx.access_infos
         ij_grid = dcir.GridSubset.from_gt4py_extent(horizontal_extent)
-
+        he_grid = ij_grid.set_interval(dcir.Axis.K, k_interval)
         self.visit(
             node.body,
             horizontal_extent=horizontal_extent,
             ctx=inner_ctx,
-            he_grid=ij_grid,
+            he_grid=he_grid,
+            grid_subset=grid_subset,
             **kwargs,
         )
 
@@ -1000,7 +1029,7 @@ class AccessInfoCollector(NodeVisitor):
         self.generic_visit(node, is_conditional=True, **kwargs)
 
     @staticmethod
-    def _regions_as_grid_subset(
+    def _global_grid_subset(
         regions: List[oir.HorizontalMask],
         he_grid: "dcir.GridSubset",
         offset: List[Optional[int]],
@@ -1008,7 +1037,8 @@ class AccessInfoCollector(NodeVisitor):
         from gtc import daceir as dcir
 
         res: Dict[
-            dcir.Axis, Union[dcir.DomainInterval, dcir.TileInterval, dcir.IndexWithExtent]
+            dcir.Axis,
+            Union[dcir.DomainInterval, dcir.TileInterval, dcir.IndexWithExtent],
         ] = dict()
         if regions is not None:
             for mask in regions:
@@ -1030,6 +1060,9 @@ class AccessInfoCollector(NodeVisitor):
                     res[axis] = dcir.DomainInterval.union(
                         dcir_interval, res.get(axis, dcir_interval)
                     )
+        if dcir.Axis.K in he_grid.intervals:
+            off = offset[dcir.Axis.K.to_idx()] or 0
+            res[dcir.Axis.K] = he_grid.intervals[dcir.Axis.K].shifted(off)
         for axis in dcir.Axis.horizontal_axes():
             iteration_interval = he_grid.intervals[axis]
             mask_interval = res.get(axis, iteration_interval)
@@ -1045,6 +1078,7 @@ class AccessInfoCollector(NodeVisitor):
         is_conditional,
         regions,
         he_grid,
+        grid_subset,
     ):
         from gtc import daceir as dcir
 
@@ -1054,7 +1088,8 @@ class AccessInfoCollector(NodeVisitor):
         else:
             variable_offset_axes = []
 
-        regions_subset = self._regions_as_grid_subset(regions, he_grid, offset)
+        k_interval = grid_subset.intervals[dcir.Axis.K]
+        global_subset = self._global_grid_subset(regions, he_grid, offset)
         intervals = dict()
         for axis in axes:
             if axis in variable_offset_axes:
@@ -1067,7 +1102,7 @@ class AccessInfoCollector(NodeVisitor):
         grid_subset = dcir.GridSubset(intervals=intervals)
         return dcir.FieldAccessInfo(
             grid_subset=grid_subset,
-            global_grid_subset=regions_subset,
+            global_grid_subset=global_subset,
             dynamic_access=len(variable_offset_axes) > 0 or is_conditional or bool(regions),
             variable_offset_axes=variable_offset_axes,
         )
@@ -1081,6 +1116,7 @@ class AccessInfoCollector(NodeVisitor):
         is_conditional=False,
         regions=None,
         he_grid,
+        grid_subset,
         **kwargs,
     ):
         self.visit(
@@ -1090,6 +1126,7 @@ class AccessInfoCollector(NodeVisitor):
             is_write=False,
             regions=regions,
             he_grid=he_grid,
+            grid_subset=grid_subset,
             **kwargs,
         )
 
@@ -1102,6 +1139,7 @@ class AccessInfoCollector(NodeVisitor):
             is_conditional=is_conditional,
             regions=regions,
             he_grid=he_grid,
+            grid_subset=grid_subset,
         )
         ctx.access_infos[node.name] = access_info.union(
             ctx.access_infos.get(node.name, access_info)
@@ -1260,11 +1298,16 @@ def union_node_access_infos(nodes: List[eve.Node]):
             }
         )
 
-    return read_accesses, write_accesses, union_access_info_dicts(read_accesses, write_accesses)
+    return (
+        read_accesses,
+        write_accesses,
+        union_access_info_dicts(read_accesses, write_accesses),
+    )
 
 
 def union_access_info_dicts(
-    first_infos: Dict[str, "dcir.FieldAccessInfo"], second_infos: Dict[str, "dcir.FieldAccessInfo"]
+    first_infos: Dict[str, "dcir.FieldAccessInfo"],
+    second_infos: Dict[str, "dcir.FieldAccessInfo"],
 ):
     res = dict(first_infos)
     for key, access_info in second_infos.items():

@@ -80,25 +80,28 @@ def post_expand_trafos(sdfg: dace.SDFG):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
     sdfg.simplify()
-    sdfg.apply_transformations_repeated(MapCollapse, validate=False, permissive=False)
-    state = sdfg.node(0)
-    sdict = state.scope_children()
-    for mapnode in sdict[None]:
-        if not isinstance(mapnode, dace.nodes.MapEntry):
-            continue
-        inner_maps = [n for n in sdict[mapnode] if isinstance(n, dace.nodes.MapEntry)]
-        if len(inner_maps) != 1:
-            continue
-        inner_map = inner_maps[0]
-        if "k" in inner_map.params:
-            res_entry, _ = MapCollapse.apply_to(
-                sdfg,
-                outer_map_entry=mapnode,
-                inner_map_entry=inner_map,
-                save=False,
-                permissive=True,
-            )
-            res_entry.schedule = mapnode.schedule
+    sdfg.apply_transformations_repeated(
+        MapCollapse, validate=False, permissive=False, print_report=True
+    )
+    for state in sdfg.states():
+        sdict = state.scope_children()
+        for mapnode in sdict[None]:
+            if not isinstance(mapnode, dace.nodes.MapEntry):
+                continue
+            inner_maps = [n for n in sdict[mapnode] if isinstance(n, dace.nodes.MapEntry)]
+            if len(inner_maps) != 1:
+                continue
+            inner_map = inner_maps[0]
+            if "__k" in inner_map.params and len(inner_map.params) == 1:
+                res_entry, _ = MapCollapse.apply_to(
+                    sdfg,
+                    outer_map_entry=mapnode,
+                    inner_map_entry=inner_map,
+                    save=False,
+                    permissive=True,
+                    verify=True,
+                )
+                res_entry.schedule = mapnode.schedule
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, dace.nodes.MapEntry):
             node.collapse = len(node.range)
@@ -111,24 +114,11 @@ def to_device(sdfg: dace.SDFG, device):
                 dace.StorageType.GPU_Global if not array.transient else dace.StorageType.GPU_Global
             )
         for node, _ in sdfg.all_nodes_recursive():
-            if isinstance(node, VerticalLoopLibraryNode):
-                node.implementation = "block"
-                node.default_storage_type = dace.StorageType.GPU_Global
-                node.map_schedule = dace.ScheduleType.Sequential
-                node.tiling_map_schedule = dace.ScheduleType.GPU_Device
-                for _, section in node.sections:
-                    for array in section.arrays.values():
-                        array.storage = dace.StorageType.GPU_Global
-                    for node, _ in section.all_nodes_recursive():
-                        if isinstance(node, HorizontalExecutionLibraryNode):
-                            node.map_schedule = dace.ScheduleType.GPU_ThreadBlock
-    else:
+            if isinstance(node, StencilComputation):
+                node.device = dace.DeviceType.GPU
         for node, _ in sdfg.all_nodes_recursive():
             if isinstance(node, VerticalLoopLibraryNode):
-                node.implementation = "block"
-                node.map_schedule = dace.ScheduleType.Sequential
-                node.tiling_map_schedule = dace.ScheduleType.CPU_Multicore
-                node.tile_sizes = [8, 8]
+                node.device = dace.DeviceType.CPU
 
 
 def pre_expand_trafos(sdfg: dace.SDFG):
@@ -138,10 +128,27 @@ def pre_expand_trafos(sdfg: dace.SDFG):
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, StencilComputation):
             try:
-                node.expansion_order = ["TileI", "TileJ", "Sections", "K", "Stages", "I", "J"]
+                node.expansion_specification = [
+                    "TileI",
+                    "TileJ",
+                    "Sections",
+                    "TileK",
+                    "K",
+                    "Stages",
+                    "I",
+                    "J",
+                ]
                 # node.expansion_order = ["TileI", "TileJ", "Sections", "Stages", "I", "J", "K"]
             except ValueError:
-                node.expansion_order = ["TileI", "TileJ", "Sections", "K", "Stages", "I", "J"]
+                node.expansion_specification = [
+                    "TileI",
+                    "TileJ",
+                    "Sections",
+                    "K",
+                    "Stages",
+                    "I",
+                    "J",
+                ]
 
 
 def expand_and_wrap_sdfg(
@@ -162,7 +169,7 @@ def expand_and_wrap_sdfg(
     sdfg.simplify()
     sdfg.expand_library_nodes(recursive=True)
     specialize_transient_strides(sdfg, layout_map=layout_map)
-    post_expand_trafos(sdfg)
+    # post_expand_trafos(sdfg)
     return sdfg
 
 
@@ -338,6 +345,8 @@ class DaCeComputationCodegen:
     @classmethod
     def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
         self = cls()
+        sdfg = dace.SDFG.from_json(sdfg.to_json())
+        # sdfg.view()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")
@@ -457,7 +466,9 @@ class DaCeComputationCodegen:
                     )
                 )
                 symbols[name] = fmt.format(
-                    name=name, ndim=len(array.shape), origin=",".join(str(o) for o in origin)
+                    name=name,
+                    ndim=len(array.shape),
+                    origin=",".join(str(o) for o in origin),
                 )
         # the remaining arguments are variables and can be passed by name
         for sym in sdfg.signature_arglist(with_types=False, for_call=True):
@@ -473,7 +484,9 @@ class DaCeComputationCodegen:
             if array.transient:
                 continue
             res.append(f"auto && __{name}_sid")
-        for name, dtype in ((n, d) for n, d in sdfg.symbols.items() if not n.startswith("__")):
+        for name, dtype in (
+            (n, d) for n, d in sorted(sdfg.symbols.items()) if not n.startswith("__")
+        ):
             res.append(dtype.as_arg(name))
         return res
 
@@ -502,7 +515,7 @@ class DaCeBindingsCodegen:
                     ndim=len(data.shape),
                 )
             elif name in sdfg.symbols and not name.startswith("__"):
-                assert name in sdfg.symbols
+                assert name in sorted(sdfg.symbols)
                 res[name] = "{dtype} {name}".format(dtype=sdfg.symbols[name].ctype, name=name)
         return list(res[node.name] for node in gtir.params if node.name in res)
 
@@ -536,7 +549,7 @@ class DaCeBindingsCodegen:
 
             res.append(sid_def)
         # pass scalar parameters as variables
-        for name in (n for n in sdfg.symbols.keys() if not n.startswith("__")):
+        for name in sorted(n for n in sdfg.symbols.keys() if not n.startswith("__")):
             res.append(name)
         return res
 
@@ -674,7 +687,10 @@ class GTCDaceGPUBackend(BaseGTCDaceBackend):
         "is_compatible_layout": lambda x: True,
         "is_compatible_type": cuda_is_compatible_type,
     }
-    options = {**BaseGTBackend.GT_BACKEND_OPTS, "device_sync": {"versioning": True, "type": bool}}
+    options = {
+        **BaseGTBackend.GT_BACKEND_OPTS,
+        "device_sync": {"versioning": True, "type": bool},
+    }
     PYEXT_GENERATOR_CLASS = GTCDaCeExtGenerator  # type: ignore
     MODULE_GENERATOR_CLASS = DaCeCUDAPyModuleGenerator
     USE_LEGACY_TOOLCHAIN = False

@@ -1,6 +1,8 @@
 from typing import Dict, List, Tuple, Union
 
-from eve import Int, Node, Str, StrEnum
+import dace
+
+from eve import Int, IntEnum, Node, Str, StrEnum
 from gt4py import definitions as gt_def
 from gtc import common, oir
 from gtc.common import LocNode
@@ -67,12 +69,18 @@ class IndexWithExtent(Node):
 
         return IndexWithExtent(
             value=self.value,
-            extent=(min(self.extent[0], other.extent[0]), max(self.extent[1], other.extent[1])),
+            extent=(
+                min(self.extent[0], other.extent[0]),
+                max(self.extent[1], other.extent[1]),
+            ),
         )
 
     @property
     def idx_range(self):
-        return f"{self.value}{self.extent[0]:+d}", f"{self.value}{self.extent[1] + 1:+d}"
+        return (
+            f"{self.value}{self.extent[0]:+d}",
+            f"{self.value}{self.extent[1] + 1:+d}",
+        )
 
 
 class DomainInterval(Node):
@@ -109,10 +117,14 @@ class DomainInterval(Node):
     def shifted(self, offset: int):
         return DomainInterval(
             start=AxisBound(
-                axis=self.start.axis, level=self.start.level, offset=self.start.offset + offset
+                axis=self.start.axis,
+                level=self.start.level,
+                offset=self.start.offset + offset,
             ),
             end=AxisBound(
-                axis=self.end.axis, level=self.end.level, offset=self.end.offset + offset
+                axis=self.end.axis,
+                level=self.end.level,
+                offset=self.end.offset + offset,
             ),
         )
 
@@ -125,12 +137,13 @@ class TileInterval(Node):
     start_offset: int
     end_offset: int
     tile_size: int
+    domain_limit: str
 
     @property
     def size(self):
-        return "min({tile_size}, {domain_symbol} - {tile_symbol}){halo_size:+d}".format(
+        return "min({tile_size}, {domain_limit} - {tile_symbol}){halo_size:+d}".format(
             tile_size=self.tile_size,
-            domain_symbol=self.axis.domain_symbol(),
+            domain_limit=self.domain_limit,
             tile_symbol=self.axis.tile_symbol(),
             halo_size=self.end_offset - self.start_offset,
         )
@@ -139,11 +152,13 @@ class TileInterval(Node):
     def union(cls, first, second):
         assert first.axis == second.axis
         assert first.tile_size == second.tile_size
+        assert first.domain_limit == second.domain_limit
         return cls(
             axis=first.axis,
             start_offset=min(first.start_offset, second.start_offset),
             end_offset=max(first.end_offset, second.end_offset),
             tile_size=first.tile_size,
+            domain_limit=first.domain_limit,
         )
 
     @property
@@ -219,7 +234,9 @@ class GridSubset(Node):
         if isinstance(interval, oir.Interval):
             interval = DomainInterval(
                 start=AxisBound(
-                    level=interval.start.level, offset=interval.start.offset, axis=Axis.K
+                    level=interval.start.level,
+                    offset=interval.start.offset,
+                    axis=Axis.K,
                 ),
                 end=AxisBound(level=interval.end.level, offset=interval.end.offset, axis=Axis.K),
             )
@@ -249,7 +266,9 @@ class GridSubset(Node):
         if isinstance(interval, (DomainInterval, oir.Interval)):
             res_interval = DomainInterval(
                 start=AxisBound(
-                    level=interval.start.level, offset=interval.start.offset, axis=Axis.K
+                    level=interval.start.level,
+                    offset=interval.start.offset,
+                    axis=Axis.K,
                 ),
                 end=AxisBound(level=interval.end.level, offset=interval.end.offset, axis=Axis.K),
             )
@@ -280,35 +299,49 @@ class GridSubset(Node):
         res_intervals = dict()
         for axis, interval in self.intervals.items():
             if isinstance(interval, DomainInterval) and axis in tile_sizes:
-                assert (
-                    interval.start.level == common.LevelMarker.START
-                    and interval.end.level == common.LevelMarker.END
-                )
-                res_intervals[axis] = TileInterval(
-                    axis=axis,
-                    tile_size=tile_sizes[axis],
-                    start_offset=interval.start.offset,
-                    end_offset=interval.end.offset,
-                )
+                if axis == Axis.K:
+                    res_intervals[axis] = TileInterval(
+                        axis=axis,
+                        tile_size=tile_sizes[axis],
+                        start_offset=0,
+                        end_offset=0,
+                        domain_limit=str(interval.end),
+                    )
+                else:
+                    assert (
+                        interval.start.level == common.LevelMarker.START
+                        and interval.end.level == common.LevelMarker.END
+                    )
+                    res_intervals[axis] = TileInterval(
+                        axis=axis,
+                        tile_size=tile_sizes[axis],
+                        start_offset=interval.start.offset,
+                        end_offset=interval.end.offset,
+                        domain_limit=axis.domain_symbol(),
+                    )
             else:
                 res_intervals[axis] = interval
         return GridSubset(intervals=res_intervals)
 
-    def untile(self, tile_axes: List[Axis]):
-        res_intervals = dict()
-        for axis, interval in self.intervals.items():
-            if isinstance(interval, TileInterval) and axis in tile_axes:
-                res_intervals[axis] = DomainInterval(
-                    start=AxisBound(
-                        axis=axis, level=common.LevelMarker.START, offset=interval.start_offset
-                    ),
-                    end=AxisBound(
-                        axis=axis, level=common.LevelMarker.END, offset=interval.end_offset
-                    ),
-                )
-            else:
-                res_intervals[axis] = interval
-        return GridSubset(intervals=res_intervals)
+    # def untile(self, tile_axes: List[Axis]):
+    #     res_intervals = dict()
+    #     for axis, interval in self.intervals.items():
+    #         if isinstance(interval, TileInterval) and axis in tile_axes:
+    #             res_intervals[axis] = DomainInterval(
+    #                 start=AxisBound(
+    #                     axis=axis,
+    #                     level=common.LevelMarker.START,
+    #                     offset=interval.start_offset,
+    #                 ),
+    #                 end=AxisBound(
+    #                     axis=axis,
+    #                     level=common.LevelMarker.END,
+    #                     offset=interval.end_offset,
+    #                 ),
+    #             )
+    #         else:
+    #             res_intervals[axis] = interval
+    #     return GridSubset(intervals=res_intervals)
 
     def union(self, other):
         assert list(self.axes()) == list(other.axes())
@@ -384,6 +417,7 @@ class FieldAccessInfo(Node):
                         tile_size=grid_interval.tile_size,
                         start_offset=grid_interval.start_offset + extent[0],
                         end_offset=grid_interval.end_offset + extent[1],
+                        domain_limit=grid_interval.domain_limit,
                     )
                 else:
                     assert field_interval.value == grid_interval.value
@@ -496,13 +530,44 @@ class NestedSDFGNode(ComputationNode):
     symbols: Dict[str, common.DataType]
 
 
-class Tasklet(ComputationNode, LocNode):
+class Tasklet(IterationNode, ComputationNode, LocNode):
     stmts: List[Union[LocalScalar, Stmt]]
+    grid_subset: GridSubset = GridSubset.single_gridpoint()
+
+
+class MapSchedule(IntEnum):
+    Default = 0
+    Sequential = 1
+
+    CPU_Multicore = 2
+
+    GPU_Device = 3
+    GPU_ThreadBlock = 4
+
+    def to_dace_schedule(self):
+        return {
+            MapSchedule.Default: dace.ScheduleType.Default,
+            MapSchedule.Sequential: dace.ScheduleType.Sequential,
+            MapSchedule.CPU_Multicore: dace.ScheduleType.CPU_Multicore,
+            MapSchedule.GPU_Device: dace.ScheduleType.GPU_Device,
+            MapSchedule.GPU_ThreadBlock: dace.ScheduleType.GPU_ThreadBlock,
+        }[self]
+
+    @classmethod
+    def from_dace_schedule(cls, schedule):
+        return {
+            dace.ScheduleType.Default: MapSchedule.Default,
+            dace.ScheduleType.Sequential: MapSchedule.Sequential,
+            dace.ScheduleType.CPU_Multicore: MapSchedule.CPU_Multicore,
+            dace.ScheduleType.GPU_Device: MapSchedule.GPU_Device,
+            dace.ScheduleType.GPU_ThreadBlock: MapSchedule.GPU_ThreadBlock,
+        }[schedule]
 
 
 class DomainMap(ComputationNode, IterationNode):
-    index_range: Range
-    computations: List[Union[Tasklet, "DomainMap"]]
+    index_ranges: List[Range]
+    schedule: MapSchedule
+    computations: List[Union[Tasklet, "DomainMap", "StateMachine"]]
 
 
 class ComputationState(IterationNode):
@@ -516,3 +581,7 @@ class DomainLoop(IterationNode, ComputationNode):
 
 class StateMachine(NestedSDFGNode):
     states: List[Union[DomainLoop, ComputationState]]
+
+
+DomainMap.update_forward_refs()
+DomainLoop.update_forward_refs()

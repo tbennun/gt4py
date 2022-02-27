@@ -248,3 +248,25 @@ def test_nondace_raises():
         ),
     ):
         call_frozen_stencil()
+
+
+def test_basic():
+    @gtscript.stencil(backend="gtc:dace")
+    def defn(outp: gtscript.Field[np.float64], par: np.float64):
+        with computation(PARALLEL), interval(...):
+            outp = par  # noqa F841: local variable 'outp' is assigned to but never used
+
+    outp = np.zeros(dtype=np.float64, shape=(10, 10, 10))
+
+    inp = 7.0
+
+    @dace.function
+    def call_frozen_stencil():
+        defn(outp, par=inp)
+
+    call_frozen_stencil()
+
+    assert np.allclose(
+        outp,
+        7.0,
+    )
