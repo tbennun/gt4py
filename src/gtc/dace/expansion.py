@@ -412,34 +412,59 @@ class DaCeIRBuilder(NodeTranslator):
     class SymbolCollector:
         symbols: Dict[str, common.DataType]
 
+    @dataclass
     class IterationContext:
         grid_subset: dcir.GridSubset
         _context_stack = list()
 
-        def __new__(cls, *args, **kwargs):
-            res = super(DaCeIRBuilder.IterationContext, cls).__new__(cls)
+        @classmethod
+        def init(cls, *args, **kwargs):
+            assert len(cls._context_stack) == 0
+            res = cls(*args, **kwargs)
             cls._context_stack.append(res)
             return res
 
-        def __init__(self, *, grid_subset: dcir.GridSubset):
-            self.grid_subset = grid_subset
-
         @classmethod
-        def push_grid_subset(cls, grid_subset: dcir.GridSubset):
+        def push_axes_extents(cls, axes_extents):
             self = cls._context_stack[-1]
             res = self.grid_subset
-            for axis, interval in grid_subset.intervals.items():
-                res = res.set_interval(axis, interval)
-            return DaCeIRBuilder.IterationContext(
+            for axis, extent in axes_extents.items():
+                if isinstance(res.intervals[axis], dcir.DomainInterval):
+                    res__interval = dcir.DomainInterval(
+                        start=dcir.AxisBound(
+                            level=common.LevelMarker.START, offset=extent[0], axis=axis
+                        ),
+                        end=dcir.AxisBound(
+                            level=common.LevelMarker.END, offset=extent[1], axis=axis
+                        ),
+                    )
+                    res = res.set_interval(axis, res__interval)
+                elif isinstance(res.intervals[axis], dcir.TileInterval):
+                    tile_interval = dcir.TileInterval(
+                        axis=axis,
+                        start_offset=extent[0],
+                        end_offset=extent[1],
+                        tile_size=res.intervals[axis].tile_size,
+                        domain_limit=res.intervals[axis].domain_limit,
+                    )
+                    res = res.set_interval(axis, tile_interval)
+                # if is IndexWithExtent, do nothing.
+            res = DaCeIRBuilder.IterationContext(
                 grid_subset=res,
             )
+
+            cls._context_stack.append(res)
+            return res
 
         @classmethod
         def push_interval(cls, axis: dcir.Axis, interval: Union[dcir.DomainInterval, oir.Interval]):
             self = cls._context_stack[-1]
-            return DaCeIRBuilder.IterationContext(
+            res = DaCeIRBuilder.IterationContext(
                 grid_subset=self.grid_subset.set_interval(axis, interval),
             )
+
+            cls._context_stack.append(res)
+            return res
 
         @classmethod
         def push_expansion_item(cls, item):
@@ -460,7 +485,10 @@ class DaCeIRBuilder(NodeTranslator):
                     grid_subset = grid_subset.tile(tile_sizes={axis: it.stride})
                 else:
                     grid_subset = grid_subset.restricted_to_index(axis)
-            return DaCeIRBuilder.IterationContext(grid_subset=grid_subset)
+            res = DaCeIRBuilder.IterationContext(grid_subset=grid_subset)
+
+            cls._context_stack.append(res)
+            return res
 
         @classmethod
         def push_expansion_items(cls, items):
@@ -476,8 +504,8 @@ class DaCeIRBuilder(NodeTranslator):
 
         @classmethod
         def clear(cls):
-            assert len(cls._context_stack) == 1
-            del cls._context_stack[-1]
+            while cls._context_stack:
+                del cls._context_stack[-1]
 
     def _add_domain_loop(
         self,
@@ -646,7 +674,9 @@ class DaCeIRBuilder(NodeTranslator):
         )
         expansion_items = expansion_specification[stages_idx + 1 :]
 
-        iteration_ctx = iteration_ctx.push_grid_subset(dcir.GridSubset.from_gt4py_extent(extent))
+        iteration_ctx = iteration_ctx.push_axes_extents(
+            {k: v for k, v in zip(dcir.Axis.horizontal_axes(), extent)}
+        )
         iteration_ctx = iteration_ctx.push_expansion_items(expansion_items)
 
         assert iteration_ctx.grid_subset == dcir.GridSubset.single_gridpoint()
@@ -1481,11 +1511,6 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         overall_extent = Extent.zeros(ndims=3)
         for he in node.oir_node.iter_tree().if_isinstance(oir.HorizontalExecution):
             overall_extent = overall_extent.union(node.get_extents(he))
-        iteration_ctx = DaCeIRBuilder.IterationContext(
-            grid_subset=dcir.GridSubset.from_gt4py_extent(overall_extent).set_interval(
-                axis=dcir.Axis.K, interval=overall_interval
-            )
-        )
 
         parent_arrays = dict()
         for edge in parent_state.in_edges(node):
@@ -1499,15 +1524,20 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
             library_node=node, block_extents=node.get_extents, arrays=parent_arrays
         )
 
-        assert len(iteration_ctx._context_stack) == 1, len(iteration_ctx._context_stack)
-        daceir: dcir.StateMachine = DaCeIRBuilder().visit(
-            node.oir_node,
-            global_ctx=daceir_builder_global_ctx,
-            iteration_ctx=iteration_ctx,
-            expansion_specification=list(node.expansion_specification),
+        iteration_ctx = DaCeIRBuilder.IterationContext.init(
+            grid_subset=dcir.GridSubset.from_gt4py_extent(overall_extent).set_interval(
+                axis=dcir.Axis.K, interval=overall_interval
+            )
         )
-        assert len(iteration_ctx._context_stack) == 1, len(iteration_ctx._context_stack)
-        iteration_ctx.clear()
+        try:
+            daceir: dcir.StateMachine = DaCeIRBuilder().visit(
+                node.oir_node,
+                global_ctx=daceir_builder_global_ctx,
+                iteration_ctx=iteration_ctx,
+                expansion_specification=list(node.expansion_specification),
+            )
+        finally:
+            iteration_ctx.clear()
         #
         nsdfg = StencilComputationSDFGBuilder().visit(daceir)
 
