@@ -427,10 +427,11 @@ class DaCeIRBuilder(NodeTranslator):
         @classmethod
         def push_grid_subset(cls, grid_subset: dcir.GridSubset):
             self = cls._context_stack[-1]
-            for axis, interval in self.grid_subset.intervals.items():
-                grid_subset = self.grid_subset.set_interval(axis, interval)
+            res = self.grid_subset
+            for axis, interval in grid_subset.intervals.items():
+                res = res.set_interval(axis, interval)
             return DaCeIRBuilder.IterationContext(
-                grid_subset=grid_subset,
+                grid_subset=res,
             )
 
         @classmethod
