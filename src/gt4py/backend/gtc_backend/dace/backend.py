@@ -169,7 +169,7 @@ def expand_and_wrap_sdfg(
     sdfg.simplify()
     sdfg.expand_library_nodes(recursive=True)
     specialize_transient_strides(sdfg, layout_map=layout_map)
-    # post_expand_trafos(sdfg)
+    post_expand_trafos(sdfg)
     return sdfg
 
 

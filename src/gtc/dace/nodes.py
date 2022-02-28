@@ -384,19 +384,25 @@ def _populate_schedules(self, expansion_specification):
     assert all(isinstance(es, (ExpansionItem, Iteration)) for es in expansion_specification)
     is_outermost = True
     is_inside = False
+    gpu_block_tiled_axes = set()
     for es in expansion_specification:
         if isinstance(es, Map):
             if hasattr(self, "_device"):
                 if self.device == dace.DeviceType.GPU:
                     if es.schedule is None:
-                        if is_outermost:
+                        if is_outermost and any(it.kind == "tiling" for it in es.iterations):
+                            for it in es.iterations:
+                                if it.kind == "tiling":
+                                    gpu_block_tiled_axes.add(it.axis)
                             es.schedule = dace.ScheduleType.GPU_Device
                             is_outermost = False
-                        elif not is_inside:
+                        elif not is_inside and all(
+                            it.axis in gpu_block_tiled_axes for it in es.iterations
+                        ):
                             es.schedule = dace.ScheduleType.GPU_ThreadBlock
                             is_inside = True
                         else:
-                            es.schedule = dace.ScheduleType.Default
+                            es.schedule = dace.ScheduleType.Sequential
                     else:
                         if es.schedule == dace.ScheduleType.GPU_Device:
                             is_outermost = False
