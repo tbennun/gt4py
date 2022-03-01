@@ -580,6 +580,7 @@ class DomainLoop(IterationNode, ComputationNode):
 
 
 class StateMachine(NestedSDFGNode):
+    label: str
     states: List[Union[DomainLoop, ComputationState]]
 
 

@@ -346,7 +346,6 @@ class DaCeComputationCodegen:
     def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
         self = cls()
         sdfg = dace.SDFG.from_json(sdfg.to_json())
-        # sdfg.view()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
         lines = computations.split("\n")

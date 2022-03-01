@@ -810,6 +810,7 @@ class DaCeIRBuilder(NodeTranslator):
 
         return [
             dcir.StateMachine(
+                label=global_ctx.library_node.label,
                 field_decls=global_ctx.get_dcir_decls(field_accesses),
                 symbols=symbols,
                 # NestedSDFG must have same shape on input and output, matching corresponding
@@ -1017,6 +1018,7 @@ class DaCeIRBuilder(NodeTranslator):
                     symbols[str(sym)] = common.DataType.INT32
 
         return dcir.StateMachine(
+            label=global_ctx.library_node.label,
             states=self.to_state(computations, grid_subset=iteration_ctx.grid_subset),
             field_decls=global_ctx.get_dcir_decls(field_accesses),
             read_accesses={key: field_accesses[key] for key in read_accesses.keys()},
@@ -1277,7 +1279,7 @@ class StencilComputationSDFGBuilder(NodeVisitor):
             )
 
         tasklet = dace.nodes.Tasklet(
-            label=f"Tasklet_{id(node)}",
+            label=f"{sdfg_ctx.sdfg.label}_Tasklet",
             code=code,
             inputs={inp for inp in in_memlets.keys()},
             outputs={outp for outp in out_memlets.keys()},
@@ -1306,7 +1308,7 @@ class StencilComputationSDFGBuilder(NodeVisitor):
     ):
         ndranges = [self.visit(index_range) for index_range in node.index_ranges]
         ndranges = {k: v for ndrange in ndranges for k, v in ndrange.items()}
-        name = "".join(ndranges.keys()) + "_map"
+        name = sdfg_ctx.sdfg.label + "".join(ndranges.keys()) + "_map"
         map_entry, map_exit = sdfg_ctx.state.add_map(
             name=name,
             ndrange=ndranges,
@@ -1390,7 +1392,7 @@ class StencilComputationSDFGBuilder(NodeVisitor):
         node_ctx: Optional["StencilComputationSDFGBuilder.NodeContext"] = None,
     ):
 
-        sdfg = dace.SDFG(f"StateMachine_{id(node)}")
+        sdfg = dace.SDFG(node.label)
         state = sdfg.add_state()
         symbol_mapping = {}
         for axis in [dcir.Axis.I, dcir.Axis.J, dcir.Axis.K]:
