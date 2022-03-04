@@ -241,8 +241,8 @@ class BaseOirSDFGBuilder(ABC):
                     self._set_read(name, read_interval, read_accesses[name])
 
         for name, recent_access in read_accesses.items():
-            node.add_in_connector("IN_" + name)
-            self._state.add_edge(recent_access, None, node, "IN_" + name, dace.Memlet())
+            node.add_in_connector("__in_" + name)
+            self._state.add_edge(recent_access, None, node, "__in_" + name, dace.Memlet())
 
     def _add_write_edges(
         self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
@@ -265,8 +265,8 @@ class BaseOirSDFGBuilder(ABC):
                 self._set_write(name, interval, write_accesses[name])
 
         for name, access_node in write_accesses.items():
-            node.add_out_connector("OUT_" + name)
-            self._state.add_edge(node, "OUT_" + name, access_node, None, dace.Memlet())
+            node.add_out_connector("__out_" + name)
+            self._state.add_edge(node, "__out_" + name, access_node, None, dace.Memlet())
 
     def _add_write_after_write_edges(
         self, node, collections: List[Tuple[Interval, AccessCollector.GeneralAccessCollection]]
@@ -813,22 +813,22 @@ class OirSDFGBuilder(eve.NodeVisitor):
 
         for field in access_collection.read_fields():
             access_node = state.add_access(field)
-            library_node.add_in_connector("IN_" + field)
+            library_node.add_in_connector("__in_" + field)
             subset_str = ctx.dace_str_maker.make_input_subset_str(node, field)
             state.add_edge(
                 access_node,
                 None,
                 library_node,
-                "IN_" + field,
+                "__in_" + field,
                 dace.Memlet.simple(field, subset_str=subset_str),
             )
         for field in access_collection.write_fields():
             access_node = state.add_access(field)
-            library_node.add_out_connector("OUT_" + field)
+            library_node.add_out_connector("__out_" + field)
             subset_str = ctx.dace_str_maker.make_output_subset_str(node, field)
             state.add_edge(
                 library_node,
-                "OUT_" + field,
+                "__out_" + field,
                 access_node,
                 None,
                 dace.Memlet.simple(field, subset_str=subset_str),

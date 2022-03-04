@@ -223,8 +223,8 @@ def get_node_name_mapping(state: dace.SDFGState, node: dace.nodes.LibraryNode):
     name_mapping = dict()
     for edge in state.in_edges(node):
         if edge.dst_conn is not None:
-            assert edge.dst_conn.startswith("IN_")
-            internal_name = edge.dst_conn[len("IN_") :]
+            assert edge.dst_conn.startswith("__in_")
+            internal_name = edge.dst_conn[len("__in_") :]
             outer_name = edge.data.data
             if internal_name not in name_mapping:
                 name_mapping[internal_name] = outer_name
@@ -236,8 +236,8 @@ def get_node_name_mapping(state: dace.SDFGState, node: dace.nodes.LibraryNode):
                 assert name_mapping[internal_name] == outer_name, msg
     for edge in state.out_edges(node):
         if edge.src_conn is not None:
-            assert edge.src_conn.startswith("OUT_")
-            internal_name = edge.src_conn[len("OUT_") :]
+            assert edge.src_conn.startswith("__out_")
+            internal_name = edge.src_conn[len("__out_") :]
             outer_name = edge.data.data
             if internal_name not in name_mapping:
                 name_mapping[internal_name] = outer_name

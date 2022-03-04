@@ -13,7 +13,7 @@
 # distribution for a copy of the license or check <https://www.gnu.org/licenses/>.
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
-
+import copy
 import dataclasses
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -1517,10 +1517,10 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         parent_arrays = dict()
         for edge in parent_state.in_edges(node):
             if edge.dst_conn is not None:
-                parent_arrays[edge.dst_conn[len("IN_") :]] = parent_sdfg.arrays[edge.data.data]
+                parent_arrays[edge.dst_conn[len("__in_") :]] = parent_sdfg.arrays[edge.data.data]
         for edge in parent_state.out_edges(node):
             if edge.src_conn is not None:
-                parent_arrays[edge.src_conn[len("OUT_") :]] = parent_sdfg.arrays[edge.data.data]
+                parent_arrays[edge.src_conn[len("__out_") :]] = parent_sdfg.arrays[edge.data.data]
 
         daceir_builder_global_ctx = DaCeIRBuilder.GlobalContext(
             library_node=node, block_extents=node.get_extents, arrays=parent_arrays
@@ -1544,11 +1544,11 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         nsdfg = StencilComputationSDFGBuilder().visit(daceir)
 
         for in_edge in parent_state.in_edges(node):
-            assert in_edge.dst_conn.startswith("IN_")
-            in_edge.dst_conn = in_edge.dst_conn[len("IN_") :]
+            assert in_edge.dst_conn.startswith("__in_")
+            in_edge.dst_conn = in_edge.dst_conn[len("__in_") :]
         for out_edge in parent_state.out_edges(node):
-            assert out_edge.src_conn.startswith("OUT_")
-            out_edge.src_conn = out_edge.src_conn[len("OUT_") :]
+            assert out_edge.src_conn.startswith("__out_")
+            out_edge.src_conn = out_edge.src_conn[len("__out_") :]
 
         subsets = dict()
         for edge in parent_state.in_edges(node):
@@ -1558,9 +1558,9 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
                 edge.data.subset, subsets.get(edge.src_conn, edge.data.subset)
             )
         for edge in parent_state.in_edges(node):
-            edge.data.subset = subsets[edge.dst_conn]
+            edge.data.subset = copy.deepcopy(subsets[edge.dst_conn])
         for edge in parent_state.out_edges(node):
-            edge.data.subset = subsets[edge.src_conn]
+            edge.data.subset = copy.deepcopy(subsets[edge.src_conn])
         symbol_mapping = StencilComputationExpansion._solve_for_domain(daceir.field_decls, subsets)
         if "__K" in nsdfg.sdfg.free_symbols and "__K" not in symbol_mapping:
             symbol_mapping["__K"] = 0
