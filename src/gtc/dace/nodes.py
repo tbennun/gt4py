@@ -417,27 +417,32 @@ def _populate_schedules(self, expansion_specification):
                             es.schedule = dace.ScheduleType.Default
 
 
-def set_expansion_order(self, expansion_order):
-    if expansion_order is None:
-        self._expansion_order = None
-        return
-    expansion_order = copy.deepcopy(expansion_order)
-    expansion_specification = _order_as_spec(self, expansion_order)
-
-    if not _is_expansion_order_implemented(expansion_specification):
-        raise ValueError("Provided StencilComputation.expansion_order is not supported.")
-    if self.oir_node is not None:
-        if not self.is_valid_expansion_order(expansion_specification):
-            raise ValueError("Provided StencilComputation.expansion_order is invalid.")
-
-    _populate_strides(self, expansion_specification)
-    _populate_schedules(self, expansion_specification)
-    self._expansion_specification = expansion_specification
-
-
 @dataclass
 class ExpansionItem:
     pass
+
+
+def make_expansion_order(
+    node: "StencilComputation", expansion_order: List[str]
+) -> List[ExpansionItem]:
+    if expansion_order is None:
+        return None
+    expansion_order = copy.deepcopy(expansion_order)
+    expansion_specification = _order_as_spec(node, expansion_order)
+
+    if not _is_expansion_order_implemented(expansion_specification):
+        raise ValueError("Provided StencilComputation.expansion_order is not supported.")
+    if node.oir_node is not None:
+        if not node.is_valid_expansion_order(expansion_specification):
+            raise ValueError("Provided StencilComputation.expansion_order is invalid.")
+
+    _populate_strides(node, expansion_specification)
+    _populate_schedules(node, expansion_specification)
+    return expansion_specification
+
+
+def set_expansion_order(self, expansion_order):
+    self._expansion_specification = make_expansion_order(self, expansion_order)
 
 
 @dataclass
