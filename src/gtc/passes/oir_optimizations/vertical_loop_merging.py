@@ -65,3 +65,58 @@ class AdjacentLoopMerging(NodeTranslator):
             vertical_loops=vertical_loops,
             declarations=node.declarations,
         )
+
+
+class IdenticalSectionMerging(NodeTranslator):
+    @staticmethod
+    def _mergeable(
+        order: common.LoopOrder, a: oir.VerticalLoopSection, b: oir.VerticalLoopSection
+    ) -> bool:
+        if order == common.LoopOrder.BACKWARD:
+            a_lim = a.interval.start
+            b_lim = b.interval.end
+        else:
+            a_lim = a.interval.end
+            b_lim = b.interval.start
+        return a_lim.level == b_lim.level and a_lim.offset == b_lim.offset
+
+    @staticmethod
+    def _contain_same_executions(a: oir.VerticalLoopSection, b: oir.VerticalLoopSection) -> bool:
+        return a.horizontal_executions == b.horizontal_executions
+
+    @staticmethod
+    def _merge(
+        order: common.LoopOrder, a: oir.VerticalLoopSection, b: oir.VerticalLoopSection
+    ) -> oir.VerticalLoopSection:
+        new_interval = a.interval
+        if order == common.LoopOrder.BACKWARD:
+            new_interval.start = b.interval.start
+        else:
+            new_interval.end = b.interval.end
+
+        return oir.VerticalLoopSection(
+            interval=new_interval,
+            horizontal_executions=a.horizontal_executions,
+        )
+
+    def visit_VerticalLoop(self, node: oir.VerticalLoop, **kwargs: Any) -> oir.VerticalLoop:
+        if len(node.sections) <= 1:
+            return self.generic_visit(node, **kwargs)
+
+        new_sections = []
+        new_sections = [self.visit(node.sections[0], **kwargs)]
+        for section in node.sections[1:]:
+            section = self.visit(section, **kwargs)
+            syntactic_mergeable = self._mergeable(node.loop_order, new_sections[-1], section)
+            semantic_mergeable = self._contain_same_executions(new_sections[-1], section)
+            if syntactic_mergeable and semantic_mergeable:
+                new_sections[-1] = self._merge(node.loop_order, new_sections[-1], section)
+            else:
+                new_sections.append(section)
+
+        return oir.VerticalLoop(
+            loop_order=node.loop_order,
+            sections=new_sections,
+            caches=node.caches,
+            loc=node.loc,
+        )

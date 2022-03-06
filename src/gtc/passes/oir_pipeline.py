@@ -40,7 +40,10 @@ from gtc.passes.oir_optimizations.temporaries import (
     LocalTemporariesToScalars,
     WriteBeforeReadTemporariesToScalars,
 )
-from gtc.passes.oir_optimizations.vertical_loop_merging import AdjacentLoopMerging
+from gtc.passes.oir_optimizations.vertical_loop_merging import (
+    AdjacentLoopMerging,
+    IdenticalSectionMerging,
+)
 
 
 PassT = Union[Callable[[oir.Stencil], oir.Stencil], Type[NodeVisitor]]
@@ -73,9 +76,10 @@ class DefaultPipeline(OirPipeline):
     @staticmethod
     def all_steps() -> Sequence[PassT]:
         return [
+            AdjacentLoopMerging,
+            IdenticalSectionMerging,
             graph_merge_horizontal_executions,
             GreedyMerging,
-            AdjacentLoopMerging,
             LocalTemporariesToScalars,
             WriteBeforeReadTemporariesToScalars,
             OnTheFlyMerging,
