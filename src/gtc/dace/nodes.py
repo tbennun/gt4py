@@ -323,7 +323,7 @@ def _order_as_spec(computation_node, expansion_order):
                 Iteration(
                     axis=axis,
                     kind="tiling",
-                    stride=8,
+                    stride=None,
                 )
             )
         elif is_domain_map(item):
@@ -404,7 +404,17 @@ def _populate_strides(self, expansion_specification):
         else:
             if it.stride is None:
                 if it.kind == "tiling":
-                    it.stride = 8
+                    from gt4py.definitions import Extent
+
+                    if hasattr(self, "_tile_sizes"):
+                        if self.extents is not None and it.axis.to_idx() < 2:
+                            extent = Extent.zeros(3)
+                            for he_extent in self.extents.values():
+                                extent = extent.union(he_extent)
+                            extent = extent[it.axis.to_idx()]
+                        else:
+                            extent = (0, 0)
+                        it.stride = self.tile_sizes.get(it.axis, 8) + extent[0] - extent[1]
                 else:
                     it.stride = 1
 
@@ -462,7 +472,7 @@ def _populate_schedules(self, expansion_specification):
                                     gpu_block_tiled_axes.add(it.axis)
                             es.schedule = dace.ScheduleType.GPU_Device
                             is_outermost = False
-                        elif not is_inside and all(
+                        elif not is_inside and any(
                             it.axis in gpu_block_tiled_axes for it in es.iterations
                         ):
                             es.schedule = dace.ScheduleType.GPU_ThreadBlock
@@ -509,7 +519,8 @@ def make_expansion_order(
 
 
 def set_expansion_order(self, expansion_order):
-    self._expansion_specification = make_expansion_order(self, expansion_order)
+    res = make_expansion_order(self, expansion_order)
+    self._expansion_specification = res
 
 
 @dataclass
@@ -578,6 +589,11 @@ class StencilComputation(library.LibraryNode):
         ],
         allow_none=False,
         setter=set_expansion_order,
+    )
+    tile_sizes = dace.properties.DictProperty(
+        key_type=str,
+        value_type=int,
+        default={dcir.Axis.I: 8, dcir.Axis.J: 8, dcir.Axis.K: 8},
     )
     device = dace.properties.EnumProperty(
         dtype=dace.DeviceType, default=dace.DeviceType.CPU, allow_none=True
