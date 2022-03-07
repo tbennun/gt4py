@@ -236,48 +236,6 @@ class GTCDaCeExtGenerator:
             "info": json_sdfgs,
         }
 
-    def _post_process_code(self, implementation: str) -> str:
-        pattern = "__kp("
-        start = implementation.find(pattern)
-        last_start = 0
-
-        while start >= 0:
-            # Get field name
-            begin = implementation.rfind(" ", last_start, start)
-            field = implementation[begin + 1 : start]
-            while field.startswith("(") and len(field) > 0:
-                field = field[1:]
-                begin += 1
-
-            # Extract offset expression
-            stop = implementation.find(")", start + 1)
-            expr = implementation[begin + 1 : stop + 1]
-
-            # Dereferencing, e.g., (*__lev)
-            if "*" in expr:
-                stop += 1
-                is_binop = implementation[stop] == " "
-                if is_binop:
-                    end = implementation.find(")", stop + 1)
-                    expr = implementation[begin + 1 : end + 3]
-                else:
-                    expr = implementation[begin + 1 : stop + 1]
-
-            # Extract offset from expression
-            lhs = f"{field}__kp("
-            begin = expr.find(lhs)
-            end = expr.rfind(")")
-            offset = expr[begin + len(lhs) : end]
-
-            # Build new expression and replace in implementation
-            new_expr = f"{field}[(((__{field}_I_stride * i) + (__{field}_J_stride * j)) + (__{field}_K_stride * (k + {offset})))]"
-            implementation = implementation.replace(expr, new_expr, 1)
-
-            # Find the next variable offset...
-            last_start = start
-            stop += len(new_expr) - len(expr)
-            start = implementation.find(pattern, stop + 1)
-
         return implementation
 
 
