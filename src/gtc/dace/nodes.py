@@ -19,8 +19,9 @@ import copy
 import pickle
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from itertools import combinations, permutations, product
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 import dace.data
 import dace.dtypes
@@ -239,10 +240,12 @@ class HorizontalExecutionLibraryNode(OIRLibraryNode):
 
 
 def get_expansion_order_axis(item):
-    if is_domain_map(item) or is_domain_loop(item):
+    if is_domain_map(item) or (is_domain_loop(item) and not item.startswith("Cached")):
         return dcir.Axis(item[0])
     elif is_tiling(item):
         return dcir.Axis(item[-1])
+    elif item.startswith("Cached"):
+        return dcir.Axis(item[len("Cached")])
     else:
         return dcir.Axis(item)
 
@@ -252,7 +255,7 @@ def is_domain_map(item):
 
 
 def is_domain_loop(item):
-    return any(f"{axis}Loop" == item for axis in dcir.Axis.dims_3d())
+    return any(item.endswith(f"{axis}Loop") for axis in dcir.Axis.dims_3d())
 
 
 def is_tiling(item):
@@ -280,6 +283,13 @@ def _is_expansion_order_implemented(expansion_specification):
             return False
         if isinstance(item, Map) and any(it.axis == dcir.Axis.K for it in item.iterations):
             return False
+    cached_loops = [
+        item
+        for item in expansion_specification
+        if isinstance(item, Loop) and len(item.localcache_fields) > 0
+    ]
+    if len(cached_loops) > 1:
+        return False
 
     return True
 
@@ -333,12 +343,33 @@ def _order_as_spec(computation_node, expansion_order):
             )
         elif is_domain_loop(item):
             axis = get_expansion_order_axis(item)
+            if item.startswith("Cached"):
+                localcache_fields = set(computation_node.field_decls.keys())
+                for acc in computation_node.oir_node.iter_tree().if_isinstance(oir.FieldAccess):
+                    if isinstance(acc.offset, oir.VariableKOffset):
+                        if acc.name in localcache_fields:
+                            localcache_fields.remove(acc.name)
+
+                for mask_stmt in computation_node.oir_node.iter_tree().if_isinstance(oir.MaskStmt):
+                    if mask_stmt.mask.iter_tree().if_isinstance(oir.HorizontalMask).to_list():
+                        for stmt in mask_stmt.body:
+                            for acc in (
+                                stmt.iter_tree()
+                                .if_isinstance(oir.AssignStmt)
+                                .getattr("left")
+                                .if_isinstance(oir.FieldAccess)
+                            ):
+                                if acc.name in localcache_fields:
+                                    localcache_fields.remove(acc.name)
+            else:
+                localcache_fields = set()
             expansion_specification.append(
                 Loop(
                     axis=axis,
                     stride=-1
                     if computation_node.oir_node.loop_order == common.LoopOrder.BACKWARD
                     else 1,
+                    localcache_fields=localcache_fields,
                 )
             )
 
@@ -376,6 +407,41 @@ def _populate_strides(self, expansion_specification):
                     it.stride = 8
                 else:
                     it.stride = 1
+
+
+def _populate_storages(self, expansion_specification):
+    if expansion_specification is None:
+        return
+    assert all(isinstance(es, (ExpansionItem, Iteration)) for es in expansion_specification)
+    innermost_axes = set(dcir.Axis.dims_3d())
+    tiled_axes = set()
+    for item in expansion_specification:
+        if isinstance(item, Map):
+            for it in item.iterations:
+                if it.kind == "tiling":
+                    tiled_axes.add(it.axis)
+    for es in reversed(expansion_specification):
+        if isinstance(es, Loop) and es.localcache_fields:
+            if hasattr(self, "_device"):
+                if es.storage is None:
+                    if len(innermost_axes) == 3:
+                        es.storage = dace.StorageType.Register
+                    elif (
+                        self.device == dace.DeviceType.GPU and len(innermost_axes | tiled_axes) == 3
+                    ):
+                        es.storage = dace.StorageType.GPU_Shared
+                    else:
+                        if self.device == dace.DeviceType.GPU:
+                            es.storage = dace.StorageType.GPU_Global
+                        else:
+                            es.storage = dace.StorageType.CPU_Heap
+            innermost_axes.remove(es.axis)
+        elif isinstance(es, Map):
+            for it in es.iterations:
+                if it.axis in innermost_axes:
+                    innermost_axes.remove(it.axis)
+                if it.kind == "tiling":
+                    tiled_axes.remove(it.axis)
 
 
 def _populate_schedules(self, expansion_specification):
@@ -438,6 +504,7 @@ def make_expansion_order(
 
     _populate_strides(node, expansion_specification)
     _populate_schedules(node, expansion_specification)
+    _populate_storages(node, expansion_specification)
     return expansion_specification
 
 
@@ -462,7 +529,8 @@ class Map(ExpansionItem):
 @dataclass
 class Loop(Iteration, ExpansionItem):
     kind: str = "contiguous"
-    # TODO: LocalCaches
+    localcache_fields: Set[str] = dataclass_field(default_factory=set)
+    storage: dace.StorageType = None
 
 
 @dataclass
@@ -493,19 +561,19 @@ class StencilComputation(library.LibraryNode):
         element_type=ExpansionItem,
         default=[
             Map(
-                iterations=(
+                iterations=[
                     Iteration(axis=dcir.Axis.I, kind="tiling"),
                     Iteration(axis=dcir.Axis.J, kind="tiling"),
-                ),
+                ],
             ),
             Sections(),
             Iteration(axis=dcir.Axis.K, kind="contiguous"),  # Expands to either Loop or Map
             Stages(),
             Map(
-                iterations=(
+                iterations=[
                     Iteration(axis=dcir.Axis.I, kind="contiguous"),
                     Iteration(axis=dcir.Axis.J, kind="contiguous"),
-                )
+                ]
             ),
         ],
         allow_none=False,
@@ -600,7 +668,7 @@ class StencilComputation(library.LibraryNode):
             if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
                 return f"{eo}Map"
             else:
-                return f"{eo}Loop"
+                return f"Cached{eo}Loop"
         return eo
 
     def is_expansion_order_valid(self, expansion_order, *, k_inside_dims, k_inside_stages):
@@ -729,9 +797,9 @@ class StencilComputation(library.LibraryNode):
 
         optionals = {"TileI", "TileJ", "TileK"}
         required = {
-            ("KMap", "KLoop"),  # tuple represents "one of",
-            ("JMap", "JLoop"),
-            ("IMap", "ILoop"),
+            ("KMap", "KLoop", "CachedKLoop"),  # tuple represents "one of",
+            ("JMap", "JLoop", "CachedJLoop"),
+            ("IMap", "ILoop", "CachedILoop"),
         }
         prepends = []
         appends = []

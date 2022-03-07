@@ -41,6 +41,65 @@ class Axis(StrEnum):
         return [Axis.I, Axis.J, Axis.K].index(self)
 
 
+class MapSchedule(IntEnum):
+    Default = 0
+    Sequential = 1
+
+    CPU_Multicore = 2
+
+    GPU_Device = 3
+    GPU_ThreadBlock = 4
+
+    def to_dace_schedule(self):
+        return {
+            MapSchedule.Default: dace.ScheduleType.Default,
+            MapSchedule.Sequential: dace.ScheduleType.Sequential,
+            MapSchedule.CPU_Multicore: dace.ScheduleType.CPU_Multicore,
+            MapSchedule.GPU_Device: dace.ScheduleType.GPU_Device,
+            MapSchedule.GPU_ThreadBlock: dace.ScheduleType.GPU_ThreadBlock,
+        }[self]
+
+    @classmethod
+    def from_dace_schedule(cls, schedule):
+        return {
+            dace.ScheduleType.Default: MapSchedule.Default,
+            dace.ScheduleType.Sequential: MapSchedule.Sequential,
+            dace.ScheduleType.CPU_Multicore: MapSchedule.CPU_Multicore,
+            dace.ScheduleType.GPU_Device: MapSchedule.GPU_Device,
+            dace.ScheduleType.GPU_ThreadBlock: MapSchedule.GPU_ThreadBlock,
+        }[schedule]
+
+
+class StorageType(IntEnum):
+    Default = 0
+
+    CPU_Heap = 1
+
+    GPU_Global = 3
+    GPU_Shared = 4
+
+    Register = 5
+
+    def to_dace_storage(self):
+        return {
+            StorageType.Default: dace.StorageType.Default,
+            StorageType.CPU_Heap: dace.StorageType.CPU_Heap,
+            StorageType.GPU_Global: dace.StorageType.GPU_Global,
+            StorageType.GPU_Shared: dace.StorageType.GPU_Shared,
+            StorageType.Register: dace.StorageType.Register,
+        }[self]
+
+    @classmethod
+    def from_dace_storage(cls, schedule):
+        return {
+            dace.StorageType.Default: StorageType.Default,
+            dace.StorageType.CPU_Heap: StorageType.CPU_Heap,
+            dace.StorageType.GPU_Global: StorageType.GPU_Global,
+            dace.StorageType.GPU_Shared: StorageType.GPU_Shared,
+            dace.StorageType.Register: StorageType.Register,
+        }[schedule]
+
+
 class AxisBound(common.AxisBound):
     axis: Axis
 
@@ -53,22 +112,41 @@ class AxisBound(common.AxisBound):
 
 
 class IndexWithExtent(Node):
+    axis: Axis
     value: Union[AxisBound, Int, Str]
     extent: Tuple[int, int]
 
     @classmethod
     def from_axis(cls, axis: Axis, extent=(0, 0)):
-        return cls(value=axis.iteration_symbol(), extent=extent)
+        return cls(axis=axis, value=axis.iteration_symbol(), extent=extent)
 
     @property
     def size(self):
         return self.extent[1] - self.extent[0] + 1
 
-    def union(self, other: "IndexWithExtent"):
-        assert self.value == other.value
+    @property
+    def overapproximated_size(self):
+        return self.size
 
+    def union(self, other: "IndexWithExtent"):
+        assert self.axis == other.axis
+        if isinstance(self.value, int) or (isinstance(self.value, str) and self.value.isdigit()):
+            value = other.value
+        elif isinstance(other.value, int) or (
+            isinstance(other.value, str) and other.value.isdigit()
+        ):
+            value = self.value
+        elif (
+            self.value == self.axis.iteration_symbol()
+            or other.value == self.axis.iteration_symbol()
+        ):
+            value = self.axis.iteration_symbol()
+        else:
+            assert other.value == self.value
+            value = self.value
         return IndexWithExtent(
-            value=self.value,
+            axis=self.axis,
+            value=value,
             extent=(
                 min(self.extent[0], other.extent[0]),
                 max(self.extent[1], other.extent[1]),
@@ -82,6 +160,10 @@ class IndexWithExtent(Node):
             f"{self.value}{self.extent[1] + 1:+d}",
         )
 
+    def shifted(self, offset):
+        extent = self.extent[0] + offset, self.extent[1] + offset
+        return IndexWithExtent(axis=self.axis, value=self.value, extent=extent)
+
 
 class DomainInterval(Node):
     start: AxisBound
@@ -92,6 +174,10 @@ class DomainInterval(Node):
         return get_axis_bound_diff_str(
             self.end, self.start, var_name=self.start.axis.domain_symbol()
         )
+
+    @property
+    def overapproximated_size(self):
+        return self.size
 
     @classmethod
     def union(cls, first, second):
@@ -142,6 +228,15 @@ class TileInterval(Node):
     @property
     def size(self):
         return "min({tile_size}, {domain_limit} - {tile_symbol}){halo_size:+d}".format(
+            tile_size=self.tile_size,
+            domain_limit=self.domain_limit,
+            tile_symbol=self.axis.tile_symbol(),
+            halo_size=self.end_offset - self.start_offset,
+        )
+
+    @property
+    def overapproximated_size(self):
+        return "{tile_size}{halo_size:+d}".format(
             tile_size=self.tile_size,
             domain_limit=self.domain_limit,
             tile_symbol=self.axis.tile_symbol(),
@@ -222,6 +317,10 @@ class GridSubset(Node):
     @property
     def shape(self):
         return tuple(interval.size for _, interval in self.items())
+
+    @property
+    def overapproximated_shape(self):
+        return tuple(interval.overapproximated_size for _, interval in self.items())
 
     def restricted_to_index(self, axis: Axis, extent=(0, 0)) -> "GridSubset":
         intervals = dict(self.intervals)
@@ -388,6 +487,10 @@ class FieldAccessInfo(Node):
     def shape(self):
         return self.grid_subset.shape
 
+    @property
+    def overapproximated_shape(self):
+        return self.grid_subset.overapproximated_shape
+
     def apply_iteration(self, grid_subset: GridSubset):
         res_intervals = dict(self.grid_subset.intervals)
         for axis, field_interval in self.grid_subset.intervals.items():
@@ -425,7 +528,9 @@ class FieldAccessInfo(Node):
                         min(extent) + grid_interval.extent[0],
                         max(extent) + grid_interval.extent[1],
                     )
-                    res_intervals[axis] = IndexWithExtent(value=field_interval.value, extent=extent)
+                    res_intervals[axis] = IndexWithExtent(
+                        axis=axis, value=field_interval.value, extent=extent
+                    )
         return FieldAccessInfo(
             grid_subset=GridSubset(intervals=res_intervals),
             dynamic_access=self.dynamic_access,
@@ -489,6 +594,7 @@ class FieldDecl(Node):
     strides: List[Union[Int, Str]]
     data_dims: List[Int]
     access_info: FieldAccessInfo
+    storage: StorageType
 
     @property
     def shape(self):
@@ -528,40 +634,13 @@ class IterationNode(Node):
 class NestedSDFGNode(ComputationNode):
     field_decls: Dict[str, FieldDecl]
     symbols: Dict[str, common.DataType]
+    name_map: Dict[str, str]
 
 
 class Tasklet(IterationNode, ComputationNode, LocNode):
     stmts: List[Union[LocalScalar, Stmt]]
     grid_subset: GridSubset = GridSubset.single_gridpoint()
-
-
-class MapSchedule(IntEnum):
-    Default = 0
-    Sequential = 1
-
-    CPU_Multicore = 2
-
-    GPU_Device = 3
-    GPU_ThreadBlock = 4
-
-    def to_dace_schedule(self):
-        return {
-            MapSchedule.Default: dace.ScheduleType.Default,
-            MapSchedule.Sequential: dace.ScheduleType.Sequential,
-            MapSchedule.CPU_Multicore: dace.ScheduleType.CPU_Multicore,
-            MapSchedule.GPU_Device: dace.ScheduleType.GPU_Device,
-            MapSchedule.GPU_ThreadBlock: dace.ScheduleType.GPU_ThreadBlock,
-        }[self]
-
-    @classmethod
-    def from_dace_schedule(cls, schedule):
-        return {
-            dace.ScheduleType.Default: MapSchedule.Default,
-            dace.ScheduleType.Sequential: MapSchedule.Sequential,
-            dace.ScheduleType.CPU_Multicore: MapSchedule.CPU_Multicore,
-            dace.ScheduleType.GPU_Device: MapSchedule.GPU_Device,
-            dace.ScheduleType.GPU_ThreadBlock: MapSchedule.GPU_ThreadBlock,
-        }[schedule]
+    name_map: Dict[str, str]
 
 
 class DomainMap(ComputationNode, IterationNode):
@@ -574,14 +653,19 @@ class ComputationState(IterationNode):
     computations: List[Union[Tasklet, DomainMap]]
 
 
+class CopyState(ComputationNode, IterationNode):
+    name_map: Dict[str, str]
+
+
 class DomainLoop(IterationNode, ComputationNode):
+    axis: Axis
     index_range: Range
-    loop_states: List[Union[ComputationState, "DomainLoop"]]
+    loop_states: List[Union[ComputationState, CopyState, "DomainLoop"]]
 
 
 class StateMachine(NestedSDFGNode):
     label: str
-    states: List[Union[DomainLoop, ComputationState]]
+    states: List[Union[DomainLoop, CopyState, ComputationState]]
 
 
 DomainMap.update_forward_refs()

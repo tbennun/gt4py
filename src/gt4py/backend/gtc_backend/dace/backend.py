@@ -79,7 +79,7 @@ def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
 def post_expand_trafos(sdfg: dace.SDFG):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
-    sdfg.simplify()
+    # sdfg.simplify()
     sdfg.apply_transformations_repeated(
         MapCollapse, validate=False, permissive=False, print_report=True
     )
@@ -132,19 +132,17 @@ def pre_expand_trafos(sdfg: dace.SDFG):
                     "TileI",
                     "TileJ",
                     "Sections",
-                    "TileK",
-                    "K",
                     "Stages",
                     "I",
                     "J",
+                    "K",
                 ]
-                # node.expansion_order = ["TileI", "TileJ", "Sections", "Stages", "I", "J", "K"]
             except ValueError:
                 node.expansion_specification = [
                     "TileI",
                     "TileJ",
                     "Sections",
-                    "K",
+                    "CachedKLoop",
                     "Stages",
                     "I",
                     "J",
@@ -196,7 +194,6 @@ class GTCDaCeExtGenerator:
         )
         oir = oir_pipeline.run(base_oir)
         sdfg = OirSDFGBuilder().visit(oir)
-
         to_device(sdfg, self.backend.storage_info["device"])
         pre_expand_trafos(sdfg)
         specialize_transient_strides(sdfg, layout_map=self.backend.storage_info["layout_map"])

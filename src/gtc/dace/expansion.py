@@ -16,6 +16,7 @@
 import copy
 import dataclasses
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import dace
@@ -406,6 +407,7 @@ class DaCeIRBuilder(NodeTranslator):
                 strides=[str(s) for s in dace_array.strides],
                 data_dims=oir_decl.data_dims,
                 access_info=access_info,
+                storage=dcir.StorageType.from_dace_storage(dace.StorageType.Default),
             )
 
     @dataclass
@@ -507,153 +509,6 @@ class DaCeIRBuilder(NodeTranslator):
             while cls._context_stack:
                 del cls._context_stack[-1]
 
-    def _add_domain_loop(
-        self,
-        *dcir_nodes: eve.Node,
-        axis: dcir.Axis,
-        interval: Union[dcir.DomainInterval, oir.Interval, dcir.TileInterval],
-        grid_subset: dcir.GridSubset,
-        loop_order: common.LoopOrder,
-    ):
-
-        from .utils import union_node_access_infos
-
-        read_accesses, write_accesses, _ = union_node_access_infos(list(dcir_nodes))
-        read_accesses = {
-            key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
-            for key, access_info in read_accesses.items()
-        }
-        write_accesses = {
-            key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
-            for key, access_info in write_accesses.items()
-        }
-
-        stride = -1 if loop_order == common.LoopOrder.BACKWARD else 1
-        if isinstance(interval, oir.Interval):
-            start, end = (
-                dcir.AxisBound.from_common(axis, interval.start),
-                dcir.AxisBound.from_common(axis, interval.end),
-            )
-        else:
-            start, end = interval.idx_range
-        if loop_order == common.LoopOrder.BACKWARD:
-            start, end = f"({end}{stride:+1})", f"({start}{stride:+1})"
-
-        index_range = dcir.Range(var=axis.iteration_symbol(), start=start, end=end, stride=stride)
-
-        return dcir.DomainLoop(
-            index_range=index_range,
-            loop_states=self.to_state(dcir_nodes, grid_subset=grid_subset),
-            grid_subset=grid_subset,
-            read_accesses=read_accesses,
-            write_accesses=write_accesses,
-        )
-
-    def _add_domain_map(
-        self,
-        *dcir_nodes: eve.Node,
-        axis: dcir.Axis,
-        interval: dcir.DomainInterval,
-        grid_subset: dcir.GridSubset,
-        global_ctx: "DaCeIRBuilder.GlobalContext",
-    ):
-        from .utils import union_node_access_infos
-
-        index_range = dcir.Range.from_axis_and_interval(axis, interval)
-
-        read_accesses, write_accesses, _ = union_node_access_infos(list(dcir_nodes))
-
-        read_accesses = {
-            key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
-            for key, access_info in read_accesses.items()
-        }
-        write_accesses = {
-            key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
-            for key, access_info in write_accesses.items()
-        }
-
-        return dcir.DomainMap(
-            index_range=index_range,
-            computations=self.to_dataflow(dcir_nodes, global_ctx=global_ctx),
-            schedule=dcir.MapSchedule.domain(global_ctx.library_node.device),
-            grid_subset=grid_subset,
-            read_accesses=read_accesses,
-            write_accesses=write_accesses,
-        )
-
-    def _add_domain_iteration(
-        self,
-        *dcir_nodes: eve.Node,
-        axis: dcir.Axis,
-        interval: dcir.DomainInterval,
-        grid_subset: dcir.GridSubset,
-        loop_order: common.LoopOrder,
-        global_ctx: "DaCeIRBuilder.GlobalContext",
-    ):
-        if axis == dcir.Axis.K and not loop_order == common.LoopOrder.PARALLEL:
-            return self._add_domain_loop(
-                *dcir_nodes,
-                axis=axis,
-                interval=interval,
-                grid_subset=grid_subset,
-                loop_order=loop_order,
-            )
-        else:
-            return self._add_domain_map(
-                *dcir_nodes,
-                axis=axis,
-                interval=interval,
-                grid_subset=grid_subset,
-                global_ctx=global_ctx,
-            )
-
-    # def _add_tiling_map(
-    #     self,
-    #     *dcir_nodes: eve.Node,
-    #     tiling_axes,
-    #     global_ctx: "DaCeIRBuilder.GlobalContext",
-    # ):
-    #     from .utils import (
-    #         union_node_access_infos,
-    #         union_node_grid_subsets,
-    #         untile_access_info_dict,
-    #     )
-    #
-    #     grid_subset = union_node_grid_subsets(list(dcir_nodes))
-    #     read_accesses, write_accesses, _ = union_node_access_infos(list(dcir_nodes))
-    #     computations = self.to_dataflow(dcir_nodes, global_ctx=global_ctx)
-    #     for axis in tiling_axes:
-    #         axis = get_expansion_order_axis(axis)
-    #         tile_size = global_ctx.library_node.tile_sizes[str(axis)]
-    #         # grid_subset = grid_subset.untile(axis)
-    #         read_accesses = untile_access_info_dict(read_accesses, axes=[axis])
-    #         write_accesses = untile_access_info_dict(write_accesses, axes=[axis])
-    #         if axis == dcir.Axis.K:
-    #             start, end = (
-    #                 grid_subset.intervals[axis].start,
-    #                 grid_subset.intervals[axis].end,
-    #             )
-    #         else:
-    #             start, end = dcir.AxisBound.from_common(
-    #                 axis, oir.AxisBound.start()
-    #             ), dcir.AxisBound.from_common(axis, oir.AxisBound.end())
-    #         computations = [
-    #             dcir.DomainMap(
-    #                 computations=computations,
-    #                 index_range=dcir.Range(
-    #                     var=axis.tile_symbol(),
-    #                     start=start,
-    #                     end=end,
-    #                     stride=tile_size,
-    #                 ),
-    #                 schedule=dcir.MapSchedule.tiling(global_ctx.library_node.device),
-    #                 read_accesses=read_accesses,
-    #                 write_accesses=write_accesses,
-    #                 grid_subset=grid_subset,
-    #             )
-    #         ]
-    #     return computations
-
     def visit_HorizontalExecution(
         self,
         node: oir.HorizontalExecution,
@@ -699,6 +554,10 @@ class DaCeIRBuilder(NodeTranslator):
             stmts=decls + stmts,
             read_accesses=tasklet_read_accesses,
             write_accesses=tasklet_write_accesses,
+            name_map={
+                k: k
+                for k in set().union(tasklet_read_accesses.keys(), tasklet_write_accesses.keys())
+            },
         )
 
         for item in reversed(expansion_items):
@@ -818,6 +677,7 @@ class DaCeIRBuilder(NodeTranslator):
                 read_accesses={key: field_accesses[key] for key in read_accesses.keys()},
                 write_accesses={key: field_accesses[key] for key in write_accesses.keys()},
                 states=nodes,
+                name_map={key: key for key in field_accesses.keys()},
             )
         ]
 
@@ -918,11 +778,15 @@ class DaCeIRBuilder(NodeTranslator):
         else:
             assert item.kind == "contiguous"
             read_accesses = {
-                key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
+                key: access_info
+                if key.startswith("__local_")
+                else access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
                 for key, access_info in read_accesses.items()
             }
             write_accesses = {
-                key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
+                key: access_info
+                if key.startswith("__local_")
+                else access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
                 for key, access_info in write_accesses.items()
             }
 
@@ -944,6 +808,7 @@ class DaCeIRBuilder(NodeTranslator):
 
         return [
             dcir.DomainLoop(
+                axis=axis,
                 loop_states=scope_nodes,
                 index_range=index_range,
                 read_accesses=read_accesses,
@@ -1024,6 +889,7 @@ class DaCeIRBuilder(NodeTranslator):
             read_accesses={key: field_accesses[key] for key in read_accesses.keys()},
             write_accesses={key: field_accesses[key] for key in write_accesses.keys()},
             symbols=symbols,
+            name_map={key: key for key in field_accesses.keys()},
         )
 
 
@@ -1210,14 +1076,15 @@ class StencilComputationSDFGBuilder(NodeVisitor):
     ):
         code = TaskletCodegen().visit(
             node,
-            read_accesses=node.read_accesses,
-            write_accesses=node.write_accesses,
+            read_accesses={node.name_map[k]: v for k, v in node.read_accesses.items()},
+            write_accesses={node.name_map[k]: v for k, v in node.write_accesses.items()},
             sdfg_ctx=sdfg_ctx,
         )
         access_collection = AccessCollector.apply(node)
         in_memlets = dict()
-        for field, access_info in node.read_accesses.items():
-            field_decl = sdfg_ctx.field_decls[field]
+        for array_name, access_info in node.read_accesses.items():
+            field = node.name_map[array_name]
+            field_decl = sdfg_ctx.field_decls[array_name]
             for offset in access_collection.read_offsets()[field]:
                 conn_name = get_tasklet_symbol(field, offset, is_target=False)
                 subset_strs = []
@@ -1242,14 +1109,15 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                         f"0:{dim}" for dim in sdfg_ctx.field_decls[field].data_dims
                     )
                 in_memlets[conn_name] = dace.Memlet.simple(
-                    field,
+                    array_name,
                     subset_str=subset_str,
-                    dynamic=node.read_accesses[field].is_dynamic,
+                    dynamic=access_info.is_dynamic,
                 )
 
         out_memlets = dict()
-        for field, access_info in node.write_accesses.items():
-            field_decl = sdfg_ctx.field_decls[field]
+        for array_name, access_info in node.write_accesses.items():
+            field = node.name_map[array_name]
+            field_decl = sdfg_ctx.field_decls[array_name]
             conn_name = get_tasklet_symbol(field, (0, 0, 0), is_target=True)
             subset_strs = []
             for axis in access_info.axes():
@@ -1273,9 +1141,9 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                     f"0:{dim}" for dim in sdfg_ctx.field_decls[field].data_dims
                 )
             out_memlets[conn_name] = dace.Memlet.simple(
-                field,
+                array_name,
                 subset_str=subset_str,
-                dynamic=node.write_accesses[field].is_dynamic,
+                dynamic=access_info.is_dynamic,
             )
 
         tasklet = dace.nodes.Tasklet(
@@ -1435,9 +1303,13 @@ class StencilComputationSDFGBuilder(NodeVisitor):
         for name, decl in node.field_decls.items():
             inner_sdfg_ctx.sdfg.add_array(
                 name,
-                shape=decl.shape,
+                shape=decl.shape
+                if not name.startswith("__local_")
+                else decl.access_info.overapproximated_shape,
                 strides=[dace.symbolic.pystr_to_symbolic(s) for s in decl.strides],
                 dtype=np.dtype(common.data_type_to_typestr(decl.dtype)).type,
+                storage=decl.storage.to_dace_storage(),
+                transient=(name not in node.read_accesses and name not in node.write_accesses),
             )
         for symbol, dtype in node.symbols.items():
             if symbol not in inner_sdfg_ctx.sdfg.symbols:
@@ -1454,6 +1326,77 @@ class StencilComputationSDFGBuilder(NodeVisitor):
             nsdfg.symbol_mapping.setdefault(str(sym), str(sym))
 
         return nsdfg
+
+    def visit_CopyState(
+        self,
+        node: dcir.CopyState,
+        *,
+        sdfg_ctx: "StencilComputationSDFGBuilder.SDFGContext",
+        **kwargs,
+    ):
+        sdfg_ctx.add_state()
+        read_nodes = dict()
+        write_nodes = dict()
+        intermediate_nodes = dict()
+
+        for src_name, dst_name in node.name_map.items():
+            if src_name not in node.read_accesses:
+                continue
+            src_decl = sdfg_ctx.field_decls[src_name]
+            src_subset = make_subset_str(
+                src_decl.access_info, node.read_accesses[src_name], src_decl.data_dims
+            )
+            dst_decl = sdfg_ctx.field_decls[dst_name]
+            dst_subset = make_subset_str(
+                dst_decl.access_info, node.write_accesses[dst_name], dst_decl.data_dims
+            )
+
+            if src_name not in read_nodes:
+                read_nodes[src_name] = sdfg_ctx.state.add_access(src_name)
+            if dst_name not in write_nodes:
+                write_nodes[dst_name] = sdfg_ctx.state.add_access(dst_name)
+            if src_name == dst_name:
+                tmp_name = sdfg_ctx.sdfg.temp_data_name()
+                intermediate_access = sdfg_ctx.state.add_access(tmp_name)
+                stride = 1
+                strides = []
+                for s in reversed(node.read_accesses[src_name].overapproximated_shape):
+                    strides = [stride, *strides]
+                    stride = f"({stride}) * ({s})"
+
+                field_decl = sdfg_ctx.field_decls[src_name]
+                sdfg_ctx.sdfg.add_array(
+                    name=tmp_name,
+                    shape=node.read_accesses[src_name].overapproximated_shape,
+                    strides=[dace.symbolic.pystr_to_symbolic(s) for s in strides],
+                    dtype=np.dtype(common.data_type_to_typestr(field_decl.dtype)).type,
+                    transient=True,
+                )
+                tmp_subset = make_subset_str(
+                    node.read_accesses[src_name], node.read_accesses[src_name], src_decl.data_dims
+                )
+                sdfg_ctx.state.add_edge(
+                    read_nodes[src_name],
+                    None,
+                    intermediate_access,
+                    None,
+                    dace.Memlet(data=src_name, subset=src_subset, other_subset=tmp_subset),
+                )
+                sdfg_ctx.state.add_edge(
+                    intermediate_access,
+                    None,
+                    write_nodes[dst_name],
+                    None,
+                    dace.Memlet(data=tmp_name, subset=tmp_subset, other_subset=dst_subset),
+                )
+            else:
+                sdfg_ctx.state.add_edge(
+                    read_nodes[src_name],
+                    None,
+                    write_nodes[dst_name],
+                    None,
+                    dace.Memlet(data=src_name, subset=src_subset, other_subset=dst_subset),
+                )
 
 
 @dace.library.register_expansion(StencilComputation, "default")
@@ -1541,6 +1484,21 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         finally:
             iteration_ctx.clear()
         #
+        from .daceir_passes import MakeLocalCaches
+
+        cached_loops = [
+            item
+            for item in node.expansion_specification
+            if isinstance(item, Loop) and len(item.localcache_fields) > 0
+        ]
+        if len(cached_loops) > 0:
+            localcache_infos = dict()
+            for item in cached_loops:
+                localcache_infos[item.axis] = SimpleNamespace(
+                    fields=item.localcache_fields, storage=item.storage
+                )
+            daceir = MakeLocalCaches().visit(daceir, localcache_infos=localcache_infos)
+
         nsdfg = StencilComputationSDFGBuilder().visit(daceir)
 
         for in_edge in parent_state.in_edges(node):
@@ -1561,13 +1519,16 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
             edge.data.subset = copy.deepcopy(subsets[edge.dst_conn])
         for edge in parent_state.out_edges(node):
             edge.data.subset = copy.deepcopy(subsets[edge.src_conn])
-        symbol_mapping = StencilComputationExpansion._solve_for_domain(daceir.field_decls, subsets)
+        symbol_mapping = StencilComputationExpansion._solve_for_domain(
+            {
+                name: decl
+                for name, decl in daceir.field_decls.items()
+                if name in daceir.read_accesses or name in daceir.write_accesses
+            },
+            subsets,
+        )
         if "__K" in nsdfg.sdfg.free_symbols and "__K" not in symbol_mapping:
             symbol_mapping["__K"] = 0
         nsdfg.symbol_mapping.update({**symbol_mapping, **node.symbol_mapping})
-
-        # for sym in nsdfg.free_symbols:
-        #     if str(sym) not in parent_sdfg.symbols:
-        #         parent_sdfg.add_symbol(str(sym), stype=dace.int32)
 
         return nsdfg

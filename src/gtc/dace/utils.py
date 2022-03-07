@@ -1093,9 +1093,12 @@ class AccessInfoCollector(NodeVisitor):
         intervals = dict()
         for axis in axes:
             if axis in variable_offset_axes:
-                intervals[axis] = dcir.IndexWithExtent(value=axis.iteration_symbol(), extent=[0, 0])
+                intervals[axis] = dcir.IndexWithExtent(
+                    axis=axis, value=axis.iteration_symbol(), extent=[0, 0]
+                )
             else:
                 intervals[axis] = dcir.IndexWithExtent(
+                    axis=axis,
                     value=axis.iteration_symbol(),
                     extent=[offset[axis.to_idx()], offset[axis.to_idx()]],
                 )
