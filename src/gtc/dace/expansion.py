@@ -852,8 +852,9 @@ class DaCeIRBuilder(NodeTranslator):
                 **kwargs,
             )
         )
+        if node.loop_order != common.LoopOrder.PARALLEL:
+            sections = [self.to_state(s, grid_subset=iteration_ctx.grid_subset) for s in sections]
         computations = sections
-
         for item in reversed(expansion_items):
             iteration_ctx = iteration_ctx.pop()
             computations = self._process_iteration_item(
@@ -942,6 +943,8 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                 condition_expr=condition_expr,
                 increment_expr=f"{index_range.var}+({index_range.stride})",
             )
+            if index_range.var not in self.sdfg.symbols:
+                self.sdfg.add_symbol(index_range.var, stype=dace.int32)
             self.state_stack.append(after_state)
             self.state = loop_state
             return self
@@ -1270,8 +1273,8 @@ class StencilComputationSDFGBuilder(NodeVisitor):
             nsdfg = sdfg_ctx.state.add_nested_sdfg(
                 sdfg=sdfg,
                 parent=None,
-                inputs=set(node.read_accesses.keys()),
-                outputs=set(node.write_accesses.keys()),
+                inputs=set(node.name_map[k] for k in node.read_accesses.keys()),
+                outputs=set(node.name_map[k] for k in node.write_accesses.keys()),
                 symbol_mapping=symbol_mapping,
             )
             in_memlets, out_memlets = StencilComputationSDFGBuilder._get_memlets(
@@ -1282,8 +1285,8 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                 nsdfg,
                 sdfg_ctx=sdfg_ctx,
                 node_ctx=node_ctx,
-                in_memlets=in_memlets,
-                out_memlets=out_memlets,
+                in_memlets={node.name_map[k]: v for k, v in in_memlets.items()},
+                out_memlets={node.name_map[k]: v for k, v in out_memlets.items()},
             )
         else:
             nsdfg = dace.nodes.NestedSDFG(
@@ -1309,7 +1312,7 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                 strides=[dace.symbolic.pystr_to_symbolic(s) for s in decl.strides],
                 dtype=np.dtype(common.data_type_to_typestr(decl.dtype)).type,
                 storage=decl.storage.to_dace_storage(),
-                transient=(name not in node.read_accesses and name not in node.write_accesses),
+                transient=(name not in set(node.name_map.values())),
             )
         for symbol, dtype in node.symbols.items():
             if symbol not in inner_sdfg_ctx.sdfg.symbols:

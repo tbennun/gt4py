@@ -16,8 +16,7 @@ from .stencil_definitions import REGISTRY as stencil_definitions
 
 
 @lru_cache
-def make_base_case(name):
-    backend = "gtc:dace"
+def make_base_case(name, backend):
     ref_backend = "gtc:numpy"
     stencil_definition = stencil_definitions[name]
     externals = externals_registry[name]
@@ -63,8 +62,8 @@ def make_base_case(name):
     return sdfg, args, refout, expansions_dict
 
 
-def make_test_case(name):
-    sdfg, args, refout, expansions_dict = make_base_case(name)
+def make_test_case(name, backend):
+    sdfg, args, refout, expansions_dict = make_base_case(name, backend)
     next_data = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in args.items()}
     next_refout = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in refout.items()}
     next_sdfg = copy.deepcopy(sdfg)
@@ -72,16 +71,19 @@ def make_test_case(name):
 
 
 @pytest.mark.parametrize("name", stencil_definitions.keys())
+@pytest.mark.parametrize(
+    "backend", ["gtc:dace", pytest.param("gtc:dace:gpu", marks=[pytest.mark.requires_gpu])]
+)
 @pytest.mark.expensive
 @hyp.given(data=hyp_st.data())
-def test_generation(name, data: hyp_st.DataObject):
+def test_generation(name, backend, data: hyp_st.DataObject):
     if name == "arithmetic_ops":
         pytest.skip("we know this case is bad, not due to expansion.")
     print()
     print("TESTING:")
 
     try:
-        input_data, refout_data, sdfg, expansions_dict = make_test_case(name)
+        input_data, refout_data, sdfg, expansions_dict = make_test_case(name, backend)
         for node, _ in sdfg.all_nodes_recursive():
             if isinstance(node, StencilComputation):
                 expansion = data.draw(hyp_st.sampled_from(expansions_dict[node.name]))

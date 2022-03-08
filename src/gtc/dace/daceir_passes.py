@@ -1,4 +1,6 @@
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
+
+import dace
 
 import eve
 from gtc import daceir as dcir
@@ -85,6 +87,7 @@ class FieldAccessRenamer(eve.NodeMutator):
             if old_array_name in local_name_map:
                 new_array_name = local_name_map[old_array_name]
                 name_map[new_array_name] = name_map[old_array_name]
+                del name_map[old_array_name]
         return dcir.StateMachine(
             label=node.label,
             field_decls=node.field_decls,  # don't rename, this is inside
@@ -103,6 +106,7 @@ class FieldAccessRenamer(eve.NodeMutator):
             if old_array_name in local_name_map:
                 new_array_name = local_name_map[old_array_name]
                 name_map[new_array_name] = name_map[old_array_name]
+                del name_map[old_array_name]
         return dcir.Tasklet(
             read_accesses=self._rename_accesses(node.read_accesses, local_name_map=local_name_map),
             write_accesses=self._rename_accesses(
@@ -114,6 +118,39 @@ class FieldAccessRenamer(eve.NodeMutator):
 
 
 rename_field_accesses = FieldAccessRenamer().apply
+
+
+class FieldDeclPropagater(eve.NodeMutator):
+    def apply(self, node, *, decl_map):
+        return self.visit(node, decl_map=decl_map)
+
+    def visit_StateMachine(
+        self, node: dcir.StateMachine, *, decl_map: Dict[str, Tuple[Any, dace.StorageType]]
+    ):
+        field_decls = dict(node.field_decls)
+        for name, (strides, storage) in decl_map.items():
+            if name in node.name_map:
+                orig_field_decl = field_decls[node.name_map[name]]
+                field_decls[node.name_map[name]] = dcir.FieldDecl(
+                    name=orig_field_decl.name,
+                    dtype=orig_field_decl.dtype,
+                    strides=strides,
+                    data_dims=orig_field_decl.data_dims,
+                    access_info=orig_field_decl.access_info,
+                    storage=storage,
+                )
+        return dcir.StateMachine(
+            label=node.label,
+            field_decls=field_decls,  # don't rename, this is inside
+            read_accesses=node.read_accesses,
+            write_accesses=node.write_accesses,
+            symbols=node.symbols,
+            states=node.states,
+            name_map=node.name_map,
+        )
+
+
+propagate_field_decls = FieldDeclPropagater().apply
 
 
 class MakeLocalCaches(eve.NodeTranslator):
@@ -409,9 +446,13 @@ class MakeLocalCaches(eve.NodeTranslator):
         )
         local_name_map.update(inner_name_map)
 
-        _, _, field_accesses = union_node_access_infos(
+        _, _, inner_field_accesses = union_node_access_infos(
             [s for loop in states if isinstance(loop, dcir.DomainLoop) for s in loop.loop_states]
         )
+        field_accesses = {
+            k: v if k.startswith("__local_") else node.field_decls[k].access_info
+            for k, v in inner_field_accesses.items()
+        }
         for k in field_accesses.keys():
             if k not in local_name_map:
                 local_name_map[k] = k
@@ -446,6 +487,11 @@ class MakeLocalCaches(eve.NodeTranslator):
                 storage=storage,
             )
 
+        states = propagate_field_decls(
+            states,
+            decl_map={name: (decl.strides, decl.storage) for name, decl in field_decls.items()},
+        )
+
         return dcir.StateMachine(
             label=node.label,
             states=states,
@@ -453,5 +499,5 @@ class MakeLocalCaches(eve.NodeTranslator):
             write_accesses=node.write_accesses,
             field_decls=field_decls,
             symbols=node.symbols,
-            name_map={**node.name_map, **local_name_map},
+            name_map=node.name_map,
         )

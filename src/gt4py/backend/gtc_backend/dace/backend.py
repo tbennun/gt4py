@@ -135,7 +135,7 @@ def pre_expand_trafos(sdfg: dace.SDFG):
                     "Stages",
                     "I",
                     "J",
-                    "CachedKLoop",
+                    "K",
                 ]
             except ValueError:
                 node.expansion_specification = [

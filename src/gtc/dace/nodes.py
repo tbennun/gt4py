@@ -780,37 +780,105 @@ class StencilComputation(library.LibraryNode):
         res = _is_expansion_order_implemented(expansion_specification)
         return res
 
+    def k_inside_dims(self):
+        # Putting K inside of i or j is valid if
+        # * K parallel
+        # * All reads with k-offset to values modified in same HorizontalExecution are not
+        #   to fields that are also accessed horizontally (in I or J, respectively)
+        #   (else, race condition in other column)
+
+        if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
+            return {dcir.Axis.I, dcir.Axis.J}
+
+        res = {dcir.Axis.I, dcir.Axis.J}
+        for section in self.oir_node.sections:
+            for he in section.horizontal_executions:
+                i_offset_fields = set(
+                    (
+                        acc.name
+                        for acc in he.iter_tree().if_isinstance(oir.FieldAccess)
+                        if acc.offset.i != 0
+                    )
+                )
+                j_offset_fields = set(
+                    (
+                        acc.name
+                        for acc in he.iter_tree().if_isinstance(oir.FieldAccess)
+                        if acc.offset.j != 0
+                    )
+                )
+                k_offset_fields = set(
+                    (
+                        acc.name
+                        for acc in he.iter_tree().if_isinstance(oir.FieldAccess)
+                        if isinstance(acc.offset, oir.VariableKOffset) or acc.offset.k != 0
+                    )
+                )
+                modified_fields = (
+                    he.iter_tree()
+                    .if_isinstance(oir.AssignStmt)
+                    .getattr("left")
+                    .if_isinstance(oir.FieldAccess)
+                    .getattr("name")
+                    .to_set()
+                )
+                for name in modified_fields:
+                    if name in k_offset_fields and name in i_offset_fields:
+                        res.remove(dcir.Axis.I)
+                    if name in k_offset_fields and name in j_offset_fields:
+                        res.remove(dcir.Axis.J)
+        return res
+
+    def k_inside_stages(self):
+        # Putting K inside of stages is valid if
+        # * K parallel
+        # * not "ahead" in order of iteration to fields that are modified in previous
+        #   HorizontalExecutions (else, reading updated values that should be old)
+
+        if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
+            return True
+
+        for section in self.oir_node.sections:
+            modified_fields = set()
+            for he in section.horizontal_executions:
+                if modified_fields:
+                    ahead_acc = list()
+                    for acc in he.iter_tree().if_isinstancre(oir.FieldAccess):
+                        if (
+                            isinstance(acc.offset, oir.VariableKOffset)
+                            or (
+                                self.oir_node.loop_order == common.LoopOrder.FORWARD
+                                and acc.offset.k > 0
+                            )
+                            or (
+                                self.oir_node.loop_order == common.LoopOrder.BACKWARD
+                                and acc.offset.k < 0
+                            )
+                        ):
+                            ahead_acc.append(acc)
+                    if any(acc.name in modified_fields for acc in ahead_acc):
+                        return False
+
+                modified_fields.update(
+                    he.iter_tree()
+                    .if_isinstance(oir.AssignStmt)
+                    .getattr("left")
+                    .if_isinstance(oir.FieldAccess)
+                    .getattr("name")
+                    .to_set()
+                )
+
+        return True
+
     def is_valid_expansion_order(self, expansion_order: List[str]) -> bool:
         expansion_order = list(self._sanitize_expansion_item(eo) for eo in expansion_order)
-        if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
-            k_inside_dims = {dcir.Axis.I, dcir.Axis.J}
-            k_inside_stages = True
-        else:
-            k_inside_dims = {}
-            k_inside_stages = False
         return self.is_expansion_order_valid(
             expansion_order,
-            k_inside_dims=k_inside_dims,
-            k_inside_stages=k_inside_stages,
+            k_inside_dims=self.k_inside_dims(),
+            k_inside_stages=self.k_inside_stages(),
         )
 
     def valid_expansion_orders(self):
-        # Putting K inside of i or j is valid if
-        # * K parallel
-        # * TODO: All reads with k-offset to values modified in same HorizontalExecution are not
-        #   to fields that are also accessed horizontally (in I or J, respectively) horizontal as
-        #   well (else, race condition in other column)
-        # Putting K inside of stages is valid if
-        # * K parallel
-        # * TODO: not "ahead" in order of iteration to fields that are modified in previous
-        #   HorizontalExecutions (else, reading updated values that should be old)
-        if self.oir_node.loop_order == common.LoopOrder.PARALLEL:
-            k_inside_dims = {dcir.Axis.I, dcir.Axis.J}
-            k_inside_stages = True
-        else:
-            k_inside_dims = {}
-            k_inside_stages = False
-
         optionals = {"TileI", "TileJ", "TileK"}
         required = {
             ("KMap", "KLoop", "CachedKLoop"),  # tuple represents "one of",
@@ -840,8 +908,8 @@ class StencilComputation(library.LibraryNode):
                 expansion_specification = _order_as_spec(self, expansion_order)
                 if self.is_expansion_order_valid(
                     expansion_specification,
-                    k_inside_dims=k_inside_dims,
-                    k_inside_stages=k_inside_stages,
+                    k_inside_dims=self.k_inside_dims(),
+                    k_inside_stages=self.k_inside_stages(),
                 ):
                     yield expansion_order
 
