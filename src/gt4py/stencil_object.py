@@ -32,6 +32,7 @@ import dace.data
 import dace.frontend.python.common
 import numpy as np
 from dace.frontend.python.common import SDFGClosure, SDFGConvertible
+from dace.sdfg.utils import inline_sdfgs
 
 import gt4py.backend as gt_backend
 import gt4py.storage as gt_storage
@@ -217,6 +218,9 @@ class FrozenStencil(SDFGConvertible):
         for symbol in nsdfg.sdfg.free_symbols:
             if symbol not in wrapper_sdfg.symbols:
                 wrapper_sdfg.add_symbol(symbol, nsdfg.sdfg.symbols[symbol])
+
+        # Try to inline wrapped SDFG before symbols are specialized to avoid extra views
+        inline_sdfgs(wrapper_sdfg)
 
         self._sdfg_specialize_symbols(wrapper_sdfg)
 
