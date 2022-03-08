@@ -177,7 +177,9 @@ def allocate(
     return raw_buffer, field
 
 
-def allocate_gpu_unmanaged(default_origin, shape, layout_map, dtype, alignment_bytes):
+def allocate_gpu_unmanaged(
+    default_origin, shape, layout_map, dtype, alignment_bytes, return_alignment=False
+):
     dtype = np.dtype(dtype)
     assert (
         alignment_bytes % dtype.itemsize
@@ -223,6 +225,8 @@ def allocate_gpu_unmanaged(default_origin, shape, layout_map, dtype, alignment_b
     if device_field.ndim > 0:
         device_field = device_field[tuple(slice(0, s, None) for s in shape)]
 
+    if return_alignment:
+        return raw_buffer, field, device_raw_buffer, device_field, alignment_offset
     return raw_buffer, field, device_raw_buffer, device_field
 
 

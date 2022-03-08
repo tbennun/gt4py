@@ -446,12 +446,19 @@ class ExplicitlySyncedGPUStorage(Storage):
             field,
             device_raw_buffer,
             device_field,
+            alignment_offset,
         ) = storage_utils.allocate_gpu_unmanaged(
-            default_origin, shape, layout_map, dtype, alignment * dtype.itemsize
+            default_origin,
+            shape,
+            layout_map,
+            dtype,
+            alignment * dtype.itemsize,
+            return_alignment=True,
         )
         obj = field.view(_ViewableNdarray)
         obj = obj.view(ExplicitlySyncedGPUStorage)
         obj._raw_buffer = raw_buffer
+        obj._alignment_offset = alignment_offset
         obj._device_field = device_field
         obj._device_raw_buffer = device_raw_buffer
         obj.default_origin = default_origin
