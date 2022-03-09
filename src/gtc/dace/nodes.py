@@ -313,32 +313,28 @@ def _order_as_spec(computation_node, expansion_order):
                     expansion_specification.append(item)
         elif is_tiling(item):
             axis = get_expansion_order_axis(item)
-            if (
-                len(expansion_specification) == 0
-                or not isinstance(expansion_specification[-1], Map)
-                or any(it.axis == axis for it in expansion_specification[-1].iterations)
-            ):
-                expansion_specification.append(Map(iterations=[]))
-            expansion_specification[-1].iterations.append(
-                Iteration(
-                    axis=axis,
-                    kind="tiling",
-                    stride=None,
+            expansion_specification.append(
+                Map(
+                    iterations=[
+                        Iteration(
+                            axis=axis,
+                            kind="tiling",
+                            stride=None,
+                        )
+                    ]
                 )
             )
         elif is_domain_map(item):
             axis = get_expansion_order_axis(item)
-            if (
-                len(expansion_specification) == 0
-                or not isinstance(expansion_specification[-1], Map)
-                or any(it.axis == axis for it in expansion_specification[-1].iterations)
-            ):
-                expansion_specification.append(Map(iterations=[]))
-            expansion_specification[-1].iterations.append(
-                Iteration(
-                    axis=axis,
-                    kind="contiguous",
-                    stride=1,
+            expansion_specification.append(
+                Map(
+                    iterations=[
+                        Iteration(
+                            axis=axis,
+                            kind="contiguous",
+                            stride=1,
+                        )
+                    ]
                 )
             )
         elif is_domain_loop(item):
@@ -460,37 +456,133 @@ def _populate_schedules(self, expansion_specification):
     assert all(isinstance(es, (ExpansionItem, Iteration)) for es in expansion_specification)
     is_outermost = True
     is_inside = False
-    gpu_block_tiled_axes = set()
-    for es in expansion_specification:
-        if isinstance(es, Map):
-            if hasattr(self, "_device"):
-                if self.device == dace.DeviceType.GPU:
-                    if es.schedule is None:
-                        if is_outermost and any(it.kind == "tiling" for it in es.iterations):
-                            for it in es.iterations:
-                                if it.kind == "tiling":
-                                    gpu_block_tiled_axes.add(it.axis)
-                            es.schedule = dace.ScheduleType.GPU_Device
-                            is_outermost = False
-                        elif not is_inside and any(
-                            it.axis in gpu_block_tiled_axes for it in es.iterations
-                        ):
-                            es.schedule = dace.ScheduleType.GPU_ThreadBlock
-                            is_inside = True
-                        else:
-                            es.schedule = dace.ScheduleType.Sequential
-                    else:
-                        if es.schedule == dace.ScheduleType.GPU_Device:
-                            is_outermost = False
-                        elif es.schedule == dace.ScheduleType.GPU_ThreadBlock:
-                            is_inside = True
-                else:
+
+    if hasattr(self, "_device"):
+        if self.device == dace.DeviceType.GPU:
+            # On GPU if any dimension is tiled and has a contiguous map in the same axis further in
+            # pick those two maps as Device/ThreadBlock maps. If not, Make just device map with
+            # default blocksizes
+            tiled = False
+            for i, item in enumerate(expansion_specification):
+                if isinstance(item, Map):
+                    for it in item.iterations:
+                        if not tiled and it.kind == "tiling":
+                            for inner_item in expansion_specification[i + 1 :]:
+                                if isinstance(inner_item, Map) and any(
+                                    inner_it.kind == "contiguous" and inner_it.axis == it.axis
+                                    for inner_it in inner_item.iterations
+                                ):
+                                    item.schedule = dace.ScheduleType.GPU_Device
+                                    inner_item.schedule = dace.ScheduleType.GPU_ThreadBlock
+                                    tiled = True
+                                    break
+            if not tiled:
+                assert any(
+                    isinstance(item, Map) for item in expansion_specification
+                ), "needs at least one map to avoid dereferencing on CPU"
+                for es in expansion_specification:
+                    if isinstance(es, Map):
+                        if es.schedule is None:
+                            if is_outermost:
+                                es.schedule = dace.ScheduleType.GPU_Device
+                                is_outermost = False
+                            else:
+                                es.schedule = dace.ScheduleType.Default
+
+        else:
+            for es in expansion_specification:
+                if isinstance(es, Map):
                     if es.schedule is None:
                         if is_outermost:
                             es.schedule = dace.ScheduleType.CPU_Multicore
                             is_outermost = False
                         else:
                             es.schedule = dace.ScheduleType.Default
+
+
+def _collapse_maps(self, expansion_specification):
+    if hasattr(self, "_device"):
+        res_items = []
+        if self.device == dace.DeviceType.GPU:
+            tiled_axes = set()
+            for item in expansion_specification:
+                if isinstance(item, Map):
+                    if not res_items or not isinstance(res_items[-1], Map):
+                        res_items.append(item)
+                    elif item.schedule == res_items[-1].schedule:
+                        res_items[-1].iterations.extend(item.iterations)
+                    elif item.schedule is None or item.schedule == dace.ScheduleType.Default:
+                        if res_items[-1].schedule == dace.ScheduleType.GPU_Device:
+                            res_items[-1].iterations.extend(item.iterations)
+                        elif res_items[-1].schedule == dace.ScheduleType.GPU_ThreadBlock:
+                            if all(it.axis in tiled_axes for it in item.iterations):
+                                res_items[-1].iterations.extend(item.iterations)
+                            else:
+                                res_items.append(item)
+                        elif res_items[-1].iterations:
+                            res_items.append(item)
+                        else:
+                            res_items[-1] = item
+                    elif (
+                        res_items[-1].schedule is None
+                        or res_items[-1].schedule == dace.ScheduleType.Default
+                    ):
+                        if item.schedule == dace.ScheduleType.GPU_Device:
+                            res_items[-1].iterations.extend(item.iterations)
+                            res_items[-1].schedule = dace.ScheduleType.GPU_Device
+                        elif item.schedule == dace.ScheduleType.GPU_ThreadBlock:
+                            if all(it.axis in tiled_axes for it in res_items[-1].iterations):
+                                res_items[-1].iterations.extend(item.iterations)
+                                res_items[-1].schedule = dace.ScheduleType.GPU_ThreadBlock
+                            else:
+                                res_items.append(item)
+                        elif res_items[-1].iterations:
+                            res_items.append(item)
+                        else:
+                            res_items[-1] = item
+
+                    elif res_items[-1].iterations:
+                        res_items.append(item)
+                    else:
+                        res_items[-1] = item
+                    tiled_axes = tiled_axes.union(
+                        (it.axis for it in item.iterations if it.kind == "tiling")
+                    )
+                else:
+                    res_items.append(item)
+        else:
+            for item in expansion_specification:
+                if isinstance(item, Map):
+                    if not res_items or not isinstance(res_items[-1], Map):
+                        res_items.append(item)
+                    elif item.schedule == res_items[-1].schedule:
+                        res_items[-1].iterations.extend(item.iterations)
+                    elif item.schedule is None or item.schedule == dace.ScheduleType.Default:
+                        if res_items[-1].schedule == dace.ScheduleType.CPU_Multicore:
+                            res_items[-1].iterations.extend(item.iterations)
+                        else:
+                            res_items.append(item)
+                    elif (
+                        res_items[-1].schedule is None
+                        or res_items[-1].schedule == dace.ScheduleType.Default
+                    ):
+                        if item.schedule == dace.ScheduleType.CPU_Multicore:
+                            res_items[-1].iterations.extend(item.iterations)
+                            res_items[-1].schedule = dace.ScheduleType.CPU_Multicore
+                        else:
+                            res_items.append(item)
+                    else:
+                        res_items.append(item)
+                else:
+                    res_items.append(item)
+
+        for item in expansion_specification:
+            if isinstance(item, Map) and (
+                item.schedule is None or item.schedule == dace.ScheduleType.Default
+            ):
+                item.schedule = dace.ScheduleType.Sequential
+        expansion_specification.clear()
+        expansion_specification.extend(res_items)
 
 
 @dataclass
@@ -514,6 +606,7 @@ def make_expansion_order(
 
     _populate_strides(node, expansion_specification)
     _populate_schedules(node, expansion_specification)
+    _collapse_maps(node, expansion_specification)
     _populate_storages(node, expansion_specification)
     return expansion_specification
 
@@ -692,6 +785,11 @@ class StencilComputation(library.LibraryNode):
         # K can't be Map if not parallel
         if self.oir_node.loop_order != common.LoopOrder.PARALLEL and any(
             (isinstance(item, Map) and any(it.axis == dcir.Axis.K for it in item.iterations))
+            for item in expansion_specification
+        ):
+            return False
+        if not any(
+            isinstance(item, Map) or is_tiling(item) or is_domain_map(item)
             for item in expansion_specification
         ):
             return False

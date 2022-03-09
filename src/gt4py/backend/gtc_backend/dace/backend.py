@@ -79,29 +79,11 @@ def specialize_transient_strides(sdfg: dace.SDFG, layout_map):
 def post_expand_trafos(sdfg: dace.SDFG):
     while inline_sdfgs(sdfg) or fuse_states(sdfg):
         pass
-    # sdfg.simplify()
+    sdfg.simplify()
     sdfg.apply_transformations_repeated(
         MapCollapse, validate=False, permissive=False, print_report=True
     )
-    for state in sdfg.states():
-        sdict = state.scope_children()
-        for mapnode in sdict[None]:
-            if not isinstance(mapnode, dace.nodes.MapEntry):
-                continue
-            inner_maps = [n for n in sdict[mapnode] if isinstance(n, dace.nodes.MapEntry)]
-            if len(inner_maps) != 1:
-                continue
-            inner_map = inner_maps[0]
-            if "__k" in inner_map.params and len(inner_map.params) == 1:
-                res_entry, _ = MapCollapse.apply_to(
-                    sdfg,
-                    outer_map_entry=mapnode,
-                    inner_map_entry=inner_map,
-                    save=False,
-                    permissive=True,
-                    verify=True,
-                )
-                res_entry.schedule = mapnode.schedule
+
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, dace.nodes.MapEntry):
             node.collapse = len(node.range)
@@ -127,8 +109,17 @@ def pre_expand_trafos(sdfg: dace.SDFG):
     sdfg.simplify()
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, StencilComputation):
-            try:
-                node.expansion_specification = [
+            expansion_priority = [
+                [
+                    "TileI",
+                    "TileJ",
+                    "I",
+                    "J",
+                    "Sections",
+                    "K",
+                    "Stages",
+                ],
+                [
                     "TileI",
                     "TileJ",
                     "Sections",
@@ -136,17 +127,26 @@ def pre_expand_trafos(sdfg: dace.SDFG):
                     "I",
                     "J",
                     "K",
-                ]
-            except ValueError:
-                node.expansion_specification = [
+                ],
+                [
                     "TileI",
                     "TileJ",
                     "Sections",
-                    "CachedKLoop",
+                    "K",
                     "Stages",
                     "I",
                     "J",
-                ]
+                ],
+            ]
+            for exp in expansion_priority:
+
+                try:
+                    node.expansion_specification = exp
+                    print("used", exp)
+                except ValueError:
+                    continue
+                else:
+                    break
 
 
 def expand_and_wrap_sdfg(

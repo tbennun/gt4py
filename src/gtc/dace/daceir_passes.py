@@ -139,13 +139,17 @@ class FieldDeclPropagator(eve.NodeMutator):
                     access_info=orig_field_decl.access_info,
                     storage=storage,
                 )
+        states = self.visit(
+            node.states,
+            decl_map={node.name_map[k]: v for k, v in decl_map.items() if k in node.name_map},
+        )
         return dcir.StateMachine(
             label=node.label,
             field_decls=field_decls,  # don't rename, this is inside
             read_accesses=node.read_accesses,
             write_accesses=node.write_accesses,
             symbols=node.symbols,
-            states=node.states,
+            states=states,
             name_map=node.name_map,
         )
 
@@ -348,13 +352,14 @@ class MakeLocalCaches(eve.NodeTranslator):
 
         cache_fields = set()
         for name in read_accesses.keys():
-            interval = field_accesses[name].grid_subset.intervals[axis]
-            if (
-                name in localcache_infos.fields
-                and isinstance(interval, dcir.IndexWithExtent)
-                and interval.size > 1
-            ):
-                cache_fields.add(name)
+            if axis in field_accesses[name].grid_subset.intervals:
+                interval = field_accesses[name].grid_subset.intervals[axis]
+                if (
+                    name in localcache_infos.fields
+                    and isinstance(interval, dcir.IndexWithExtent)
+                    and interval.size > 1
+                ):
+                    cache_fields.add(name)
         local_name_map = {k: f"__local_{k}" for k in cache_fields}
 
         res_states = []

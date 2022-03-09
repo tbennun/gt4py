@@ -89,6 +89,7 @@ def test_generation(name, backend, data: hyp_st.DataObject):
                 expansion = data.draw(hyp_st.sampled_from(expansions_dict[node.name]))
                 print(expansion)
                 node.expansion_specification = expansion
+                print(node.expansion_specification)
     except Exception:
         print("FAILED (CONFIGURING)")
         raise
@@ -98,6 +99,7 @@ def test_generation(name, backend, data: hyp_st.DataObject):
         print("FAILED (EXPAND)")
         raise
     try:
+        sdfg.build_folder = "/dev/shm"
         csdfg = sdfg.compile()
     except Exception:
         print("FAILED (COMPILE)")
