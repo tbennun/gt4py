@@ -507,7 +507,14 @@ def _collapse_maps(self, expansion_specification):
             tiled_axes = set()
             for item in expansion_specification:
                 if isinstance(item, Map):
-                    if not res_items or not isinstance(res_items[-1], Map):
+                    if (
+                        not res_items
+                        or not isinstance(res_items[-1], Map)
+                        or any(
+                            it.axis in set(outer_it.axis for outer_it in res_items[-1].iterations)
+                            for it in item.iterations
+                        )
+                    ):
                         res_items.append(item)
                     elif item.schedule == res_items[-1].schedule:
                         res_items[-1].iterations.extend(item.iterations)
@@ -553,7 +560,14 @@ def _collapse_maps(self, expansion_specification):
         else:
             for item in expansion_specification:
                 if isinstance(item, Map):
-                    if not res_items or not isinstance(res_items[-1], Map):
+                    if (
+                        not res_items
+                        or not isinstance(res_items[-1], Map)
+                        or any(
+                            it.axis in set(outer_it.axis for outer_it in res_items[-1].iterations)
+                            for it in item.iterations
+                        )
+                    ):
                         res_items.append(item)
                     elif item.schedule == res_items[-1].schedule:
                         res_items[-1].iterations.extend(item.iterations)
