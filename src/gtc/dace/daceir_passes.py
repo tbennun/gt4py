@@ -120,7 +120,7 @@ class FieldAccessRenamer(eve.NodeMutator):
 rename_field_accesses = FieldAccessRenamer().apply
 
 
-class FieldDeclPropagater(eve.NodeMutator):
+class FieldDeclPropagator(eve.NodeMutator):
     def apply(self, node, *, decl_map):
         return self.visit(node, decl_map=decl_map)
 
@@ -150,7 +150,7 @@ class FieldDeclPropagater(eve.NodeMutator):
         )
 
 
-propagate_field_decls = FieldDeclPropagater().apply
+propagate_field_decls = FieldDeclPropagator().apply
 
 
 class MakeLocalCaches(eve.NodeTranslator):
@@ -357,12 +357,15 @@ class MakeLocalCaches(eve.NodeTranslator):
                 cache_fields.add(name)
         local_name_map = {k: f"__local_{k}" for k in cache_fields}
 
-        res_states = [
-            self._make_cache_init_state(
-                loops, read_accesses=read_accesses, local_name_map=local_name_map
-            )
-        ]
+        res_states = []
+        last_loop_node = None
         for loop_node, loop_state_nodes in loops_and_states:
+            if not res_states or last_loop_node.index_range.end != loop_node.index_range.start:
+                res_states.append(
+                    self._make_cache_init_state(
+                        [loop_node], read_accesses=read_accesses, local_name_map=local_name_map
+                    )
+                )
             (fill_state, *loop_states, flush_state, shift_state,) = self._make_localcache_states(
                 loop_node,
                 loop_state_nodes,
@@ -382,6 +385,7 @@ class MakeLocalCaches(eve.NodeTranslator):
                     write_accesses=loop_node.write_accesses,
                 )
             )
+            last_loop_node = loop_node
         return res_states, local_name_map
 
     def visit_DomainLoop(self, node: dcir.DomainLoop, *, ctx_name_map, localcache_infos):
