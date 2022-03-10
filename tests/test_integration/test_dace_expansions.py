@@ -1,6 +1,7 @@
 import copy
 from functools import lru_cache
 
+import cupy
 import dace
 import hypothesis as hyp
 import numpy as np
@@ -47,13 +48,11 @@ def make_base_case(name, backend):
             for i, (ax, m) in enumerate(zip("IJK", v.mask)):
                 if m:
                     if f"__{k}_{ax}_stride" in sdfg.free_symbols:
-                        sdfg.specialize(
-                            {f"__{k}_{ax}_stride": v.strides[sum(v.mask[:i])] // v.itemsize}
-                        )
+                        sdfg.replace(f"__{k}_{ax}_stride", v.strides[sum(v.mask[:i])] // v.itemsize)
+                        sdfg.remove_symbol(f"__{k}_{ax}_stride")
                     if f"__{k}_{ax}_size" in sdfg.free_symbols:
-                        sdfg.specialize(
-                            {f"__{k}_{ax}_size": v.shape[sum(v.mask[:i])] // v.itemsize}
-                        )
+                        sdfg.replace(f"__{k}_{ax}_size", v.shape[sum(v.mask[:i])])
+                        sdfg.remove_symbol(f"__{k}_{ax}_size")
 
     expansions_dict = dict()
     for node, _ in sdfg.all_nodes_recursive():
@@ -100,7 +99,8 @@ def test_generation(name, backend, data: hyp_st.DataObject):
         raise
     try:
         sdfg.build_folder = "/dev/shm"
-        csdfg = sdfg.compile()
+        with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
+            csdfg = sdfg.compile()
     except Exception:
         print("FAILED (COMPILE)")
         raise
@@ -108,12 +108,15 @@ def test_generation(name, backend, data: hyp_st.DataObject):
         # this config is so that gt4py storages are allowed as arguments
         with dace.config.set_temporary("compiler", "allow_view_arguments", value=True):
             csdfg(**input_data)
+        cupy.cuda.Device(0).synchronize()
     except Exception:
         print("FAILED (CALL)")
         raise
 
     for k, v in refout_data.items():
         try:
+            if hasattr(input_data[k], "device_to_host"):
+                input_data[k].device_to_host(force=True)
             np.testing.assert_allclose(
                 np.array(v),
                 np.array(input_data[k]),

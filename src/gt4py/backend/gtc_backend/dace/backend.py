@@ -138,15 +138,19 @@ def pre_expand_trafos(sdfg: dace.SDFG):
                     "J",
                 ],
             ]
+            is_set = False
             for exp in expansion_priority:
 
                 try:
                     node.expansion_specification = exp
                     print("used", exp)
+                    is_set = True
                 except ValueError:
                     continue
                 else:
                     break
+            if not is_set:
+                raise ValueError("No expansion compatible")
 
 
 def expand_and_wrap_sdfg(

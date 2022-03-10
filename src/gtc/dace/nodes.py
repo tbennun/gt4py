@@ -292,6 +292,23 @@ def _is_expansion_order_implemented(expansion_specification):
     if len(cached_loops) > 1:
         return False
 
+    not_outermost_dims = set()
+    for item in expansion_specification:
+        iterations = []
+        if isinstance(item, Loop):
+            if item.localcache_fields:
+                if not all(
+                    axis in not_outermost_dims or axis == item.axis for axis in dcir.Axis.dims_3d()
+                ):
+                    return False
+            iterations = [item]
+        elif isinstance(item, Iteration):
+            iterations = [item]
+        elif isinstance(item, Map):
+            iterations = item.iterations
+        for it in iterations:
+            not_outermost_dims.add(it.axis)
+
     return True
 
 
@@ -962,7 +979,7 @@ class StencilComputation(library.LibraryNode):
             for he in section.horizontal_executions:
                 if modified_fields:
                     ahead_acc = list()
-                    for acc in he.iter_tree().if_isinstancre(oir.FieldAccess):
+                    for acc in he.iter_tree().if_isinstance(oir.FieldAccess):
                         if (
                             isinstance(acc.offset, oir.VariableKOffset)
                             or (
