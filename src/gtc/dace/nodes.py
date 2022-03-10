@@ -28,6 +28,7 @@ import dace.dtypes
 import dace.properties
 import dace.subsets
 import networkx as nx
+import numpy as np
 from dace import library
 
 from gt4py.definitions import Extent
@@ -733,12 +734,18 @@ class StencilComputation(library.LibraryNode):
             self.extents = extents_dict
             self.declarations = declarations
             self.symbol_mapping = {
-                decl.name: decl.name
+                decl.name: dace.symbol(
+                    decl.name,
+                    dtype=dace.typeclass(np.dtype(common.data_type_to_typestr(decl.dtype)).type),
+                )
                 for decl in declarations.values()
                 if isinstance(decl, oir.ScalarDecl)
             }
             self.symbol_mapping.update(
-                {axis.domain_symbol(): axis.domain_symbol() for axis in dcir.Axis.dims_3d()}
+                {
+                    axis.domain_symbol(): dace.symbol(axis.domain_symbol(), dtype=dace.int32)
+                    for axis in dcir.Axis.dims_3d()
+                }
             )
             if oir_node.loc is not None:
 

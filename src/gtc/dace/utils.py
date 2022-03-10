@@ -116,7 +116,7 @@ def replace_strides(arrays, get_layout_map):
             for idx in reversed(np.argsort(layout)):
                 symbol = array.strides[idx]
                 if symbol.is_symbol:
-                    symbol_mapping[str(symbol)] = stride
+                    symbol_mapping[str(symbol)] = dace.symbolic.pystr_to_symbolic(stride)
                 stride *= array.shape[idx]
     return symbol_mapping
 

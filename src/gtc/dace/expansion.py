@@ -1268,7 +1268,9 @@ class StencilComputationSDFGBuilder(NodeVisitor):
         symbol_mapping = {}
         for axis in [dcir.Axis.I, dcir.Axis.J, dcir.Axis.K]:
             sdfg.add_symbol(axis.domain_symbol(), stype=dace.int32)
-            symbol_mapping[axis.domain_symbol()] = axis.domain_symbol()
+            symbol_mapping[axis.domain_symbol()] = dace.symbol(
+                axis.domain_symbol(), dtype=dace.int32
+            )
         if sdfg_ctx is not None and node_ctx is not None:
             nsdfg = sdfg_ctx.state.add_nested_sdfg(
                 sdfg=sdfg,
@@ -1317,16 +1319,18 @@ class StencilComputationSDFGBuilder(NodeVisitor):
         for symbol, dtype in node.symbols.items():
             if symbol not in inner_sdfg_ctx.sdfg.symbols:
                 inner_sdfg_ctx.sdfg.add_symbol(
-                    symbol, stype=np.dtype(common.data_type_to_typestr(dtype)).type
+                    symbol, stype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name)
                 )
-            nsdfg.symbol_mapping[symbol] = symbol
+            nsdfg.symbol_mapping[symbol] = dace.symbol(
+                symbol, dtype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name)
+            )
 
         for computation_state in node.states:
             self.visit(computation_state, sdfg_ctx=inner_sdfg_ctx)
         for sym in nsdfg.sdfg.free_symbols:
             if sym not in nsdfg.sdfg.symbols:
                 nsdfg.sdfg.add_symbol(sym, stype=dace.int32)
-            nsdfg.symbol_mapping.setdefault(str(sym), str(sym))
+            nsdfg.symbol_mapping.setdefault(str(sym), dace.symbol(sym, dtype=dace.int32))
 
         return nsdfg
 
@@ -1437,7 +1441,7 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
         # Solve for all at once
         results = sympy.solve(equations, *symbols, dict=True)
         result = results[0]
-        result = {str(k)[len("__SOLVE_") :]: str(v) for k, v in result.items()}
+        result = {str(k)[len("__SOLVE_") :]: v for k, v in result.items()}
         return result
 
     @staticmethod
