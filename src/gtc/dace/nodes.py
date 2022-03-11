@@ -309,6 +309,15 @@ def _is_expansion_order_implemented(expansion_specification):
         for it in iterations:
             not_outermost_dims.add(it.axis)
 
+    is_outermost_loop_in_sdfg = True
+    for item in expansion_specification:
+        if isinstance(item, Loop):
+            if not is_outermost_loop_in_sdfg and item.localcache_fields:
+                return False
+            is_outermost_loop_in_sdfg = False
+        else:
+            is_outermost_loop_in_sdfg = True
+
     return True
 
 
