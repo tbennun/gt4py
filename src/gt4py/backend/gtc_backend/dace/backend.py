@@ -35,7 +35,7 @@ from gt4py.backend.gt_backends import (
 from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to_sid
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
-from gtc import gtir, gtir_to_oir
+from gtc import gtir, gtir_to_oir, common
 from gtc.common import CartesianOffset, LevelMarker
 from gtc.dace.nodes import (
     HorizontalExecutionLibraryNode,
@@ -109,36 +109,46 @@ def pre_expand_trafos(sdfg: dace.SDFG):
     sdfg.simplify()
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, StencilComputation):
-            expansion_priority = [
+            if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
+                expansion_priority = [
+                    ["Sections", "Stages", "K", "J", "I"],
+                ]
+            else:
+                expansion_priority = [
+                    ["J", "I", "Sections", "Stages", "K"],
+                ]
+
+            expansion_priority.extend(
                 [
-                    "TileI",
-                    "TileJ",
-                    "I",
-                    "J",
-                    "Sections",
-                    "K",
-                    "Stages",
-                ],
-                [
-                    "TileI",
-                    "TileJ",
-                    "Sections",
-                    "Stages",
-                    "I",
-                    "J",
-                    "K",
-                ],
-                [
-                    "TileI",
-                    "TileJ",
-                    "Sections",
-                    "K",
-                    "Stages",
-                    "I",
-                    "J",
-                ],
-            ]
-            is_set = False
+                    [
+                        "TileI",
+                        "TileJ",
+                        "Sections",
+                        "K",
+                        "Stages",
+                        "I",
+                        "J",
+                    ],
+                    [
+                        "TileI",
+                        "TileJ",
+                        "I",
+                        "J",
+                        "Sections",
+                        "K",
+                        "Stages",
+                    ],
+                    [
+                        "TileI",
+                        "TileJ",
+                        "Sections",
+                        "Stages",
+                        "I",
+                        "J",
+                        "K",
+                    ],
+                ]
+            )
             for exp in expansion_priority:
 
                 try:
