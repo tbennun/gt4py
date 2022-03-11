@@ -1497,21 +1497,21 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
             )
         finally:
             iteration_ctx.clear()
-        #
-        from .daceir_passes import MakeLocalCaches
 
-        cached_loops = [
-            item
-            for item in node.expansion_specification
-            if isinstance(item, Loop) and len(item.localcache_fields) > 0
-        ]
-        if len(cached_loops) > 0:
-            localcache_infos = dict()
-            for item in cached_loops:
-                localcache_infos[item.axis] = SimpleNamespace(
-                    fields=item.localcache_fields, storage=item.storage
-                )
-            daceir = MakeLocalCaches().visit(daceir, localcache_infos=localcache_infos)
+        # from .daceir_passes import MakeLocalCaches
+        #
+        # cached_loops = [
+        #     item
+        #     for item in node.expansion_specification
+        #     if isinstance(item, Loop) and len(item.localcache_fields) > 0
+        # ]
+        # if len(cached_loops) > 0:
+        #     localcache_infos = dict()
+        #     for item in cached_loops:
+        #         localcache_infos[item.axis] = SimpleNamespace(
+        #             fields=item.localcache_fields, storage=item.storage
+        #         )
+        #     daceir = MakeLocalCaches().visit(daceir, localcache_infos=localcache_infos)
 
         nsdfg = StencilComputationSDFGBuilder().visit(daceir)
 

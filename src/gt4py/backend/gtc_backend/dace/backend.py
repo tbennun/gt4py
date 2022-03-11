@@ -35,7 +35,7 @@ from gt4py.backend.gt_backends import (
 from gt4py.backend.gtc_backend.common import bindings_main_template, pybuffer_to_sid
 from gt4py.backend.gtc_backend.defir_to_gtir import DefIRToGTIR
 from gt4py.ir import StencilDefinition
-from gtc import gtir, gtir_to_oir, common
+from gtc import common, gtir, gtir_to_oir
 from gtc.common import CartesianOffset, LevelMarker
 from gtc.dace.nodes import (
     HorizontalExecutionLibraryNode,
@@ -111,44 +111,12 @@ def pre_expand_trafos(sdfg: dace.SDFG):
         if isinstance(node, StencilComputation):
             if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
                 expansion_priority = [
-                    ["Sections", "Stages", "K", "J", "I"],
+                    ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
                 ]
             else:
                 expansion_priority = [
-                    ["J", "I", "Sections", "Stages", "K"],
+                    ["TileJ", "TileI", "Sections", "KLoop", "Stages", "JMap", "IMap"],
                 ]
-
-            expansion_priority.extend(
-                [
-                    [
-                        "TileI",
-                        "TileJ",
-                        "Sections",
-                        "K",
-                        "Stages",
-                        "I",
-                        "J",
-                    ],
-                    [
-                        "TileI",
-                        "TileJ",
-                        "I",
-                        "J",
-                        "Sections",
-                        "K",
-                        "Stages",
-                    ],
-                    [
-                        "TileI",
-                        "TileJ",
-                        "Sections",
-                        "Stages",
-                        "I",
-                        "J",
-                        "K",
-                    ],
-                ]
-            )
             for exp in expansion_priority:
 
                 try:
