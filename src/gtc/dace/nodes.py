@@ -1058,6 +1058,13 @@ class StencilComputation(library.LibraryNode):
                 ):
                     yield expansion_order
 
+    @property
+    def free_symbols(self) -> Set[str]:
+        result: Set[str] = set()
+        for v in self.symbol_mapping.values():
+            result.update(map(str, v.free_symbols))
+        return result
+
     #
     # def __eq__(self, other):
     #     super(StencilComputation, self).__eq__(other)
