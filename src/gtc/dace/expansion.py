@@ -1186,14 +1186,18 @@ class StencilComputationSDFGBuilder(NodeVisitor):
             schedule=node.schedule.to_dace_schedule(),
         )
 
-        input_node_and_conns: Dict[Optional[str], Tuple[dace.nodes.Node, Optional[str]]] = dict()
-        output_node_and_conns: Dict[Optional[str], Tuple[dace.nodes.Node, Optional[str]]] = dict()
         for scope_node in node.computations:
-            for field in node.read_accesses.keys():
+            input_node_and_conns: Dict[
+                Optional[str], Tuple[dace.nodes.Node, Optional[str]]
+            ] = dict()
+            output_node_and_conns: Dict[
+                Optional[str], Tuple[dace.nodes.Node, Optional[str]]
+            ] = dict()
+            for field in scope_node.read_accesses.keys():
                 map_entry.add_in_connector("IN_" + field)
                 map_entry.add_out_connector("OUT_" + field)
                 input_node_and_conns[field] = (map_entry, "OUT_" + field)
-            for field in node.write_accesses.keys():
+            for field in scope_node.write_accesses.keys():
                 map_exit.add_in_connector("IN_" + field)
                 map_exit.add_out_connector("OUT_" + field)
                 output_node_and_conns[field] = (map_exit, "IN_" + field)
@@ -1205,7 +1209,6 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                 input_node_and_conns=input_node_and_conns,
                 output_node_and_conns=output_node_and_conns,
             )
-
             self.visit(scope_node, sdfg_ctx=sdfg_ctx, node_ctx=inner_node_ctx)
 
         in_memlets, out_memlets = self._get_memlets(node, sdfg_ctx=sdfg_ctx, node_ctx=node_ctx)
@@ -1319,10 +1322,12 @@ class StencilComputationSDFGBuilder(NodeVisitor):
         for symbol, dtype in node.symbols.items():
             if symbol not in inner_sdfg_ctx.sdfg.symbols:
                 inner_sdfg_ctx.sdfg.add_symbol(
-                    symbol, stype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name)
+                    symbol,
+                    stype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name),
                 )
             nsdfg.symbol_mapping[symbol] = dace.symbol(
-                symbol, dtype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name)
+                symbol,
+                dtype=dace.typeclass(np.dtype(common.data_type_to_typestr(dtype)).name),
             )
 
         for computation_state in node.states:
@@ -1380,7 +1385,9 @@ class StencilComputationSDFGBuilder(NodeVisitor):
                     transient=True,
                 )
                 tmp_subset = make_subset_str(
-                    node.read_accesses[src_name], node.read_accesses[src_name], src_decl.data_dims
+                    node.read_accesses[src_name],
+                    node.read_accesses[src_name],
+                    src_decl.data_dims,
                 )
                 sdfg_ctx.state.add_edge(
                     read_nodes[src_name],

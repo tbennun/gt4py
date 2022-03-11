@@ -125,7 +125,10 @@ class FieldDeclPropagator(eve.NodeMutator):
         return self.visit(node, decl_map=decl_map)
 
     def visit_StateMachine(
-        self, node: dcir.StateMachine, *, decl_map: Dict[str, Tuple[Any, dace.StorageType]]
+        self,
+        node: dcir.StateMachine,
+        *,
+        decl_map: Dict[str, Tuple[Any, dace.StorageType]],
     ):
         field_decls = dict(node.field_decls)
         for name, (strides, storage) in decl_map.items():
@@ -169,23 +172,14 @@ class MakeLocalCaches(eve.NodeTranslator):
         cache_field_reads = {
             name: read_accesses[name] for name in local_name_map.keys() if name in read_accesses
         }
-        if len(set(loop.index_range.stride for loop in loops)) == 1:
-            offset = loops[0].index_range.stride
-        else:
-            offset = 0
         cache_populate_accesses = dict()
         for name, info in cache_field_reads.items():
             interval = info.grid_subset.intervals[axis]
-            # if interval.extent[1] - interval.extent[0] <= 1:
-            #     continue
-            # if offset < 0:
-            #     extent = interval.extent[0] - offset, interval.extent[1]
-            # else:
-            #     extent = interval.extent[0], interval.extent[1] - offset
             extent = interval.extent
             cache_populate_accesses[name] = dcir.FieldAccessInfo(
                 grid_subset=info.grid_subset.set_interval(
-                    axis, dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent)
+                    axis,
+                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
                 ),
                 global_grid_subset=info.global_grid_subset,
                 dynamic_access=info.dynamic_access,
@@ -233,14 +227,11 @@ class MakeLocalCaches(eve.NodeTranslator):
         cache_populate_accesses = dict()
         for name, info in cache_field_reads.items():
             interval = info.grid_subset.intervals[axis]
-            # # if loop.index_range.stride < 0:
-            # #     extent = interval.extent[0] - loop.index_range.stride, interval.extent[1]
-            # # else:
-            # extent = interval.extent[0] - loop.index_range.stride, interval.extent[1] - loop.index_range.stride
             extent = interval.extent
             cache_populate_accesses[name] = dcir.FieldAccessInfo(
                 grid_subset=info.grid_subset.set_interval(
-                    axis, dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent)
+                    axis,
+                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
                 ),
                 global_grid_subset=info.global_grid_subset,
                 dynamic_access=info.dynamic_access,
@@ -258,7 +249,8 @@ class MakeLocalCaches(eve.NodeTranslator):
                 extent = interval.extent[1], interval.extent[1]
             next_value_accesses[name] = dcir.FieldAccessInfo(
                 grid_subset=info.grid_subset.set_interval(
-                    axis, dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent)
+                    axis,
+                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
                 ),
                 global_grid_subset=info.global_grid_subset,
                 dynamic_access=info.dynamic_access,
@@ -272,7 +264,8 @@ class MakeLocalCaches(eve.NodeTranslator):
             extent = [0, 0]
             written_value_accesses[name] = dcir.FieldAccessInfo(
                 grid_subset=info.grid_subset.set_interval(
-                    axis, dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent)
+                    axis,
+                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
                 ),
                 global_grid_subset=info.global_grid_subset,
                 dynamic_access=info.dynamic_access,
@@ -353,11 +346,15 @@ class MakeLocalCaches(eve.NodeTranslator):
         cache_fields = set()
         for name in read_accesses.keys():
             if axis in field_accesses[name].grid_subset.intervals:
-                interval = field_accesses[name].grid_subset.intervals[axis]
+                read_access = read_accesses.get(name, None)
+                if read_access is not None:
+                    read_interval = read_access.grid_subset.intervals[axis]
+                else:
+                    read_interval = None
                 if (
                     name in localcache_infos.fields
-                    and isinstance(interval, dcir.IndexWithExtent)
-                    and interval.size > 1
+                    and isinstance(read_interval, dcir.IndexWithExtent)
+                    and read_interval.size > 1
                 ):
                     cache_fields.add(name)
         local_name_map = {k: f"__local_{k}" for k in cache_fields}
@@ -365,10 +362,18 @@ class MakeLocalCaches(eve.NodeTranslator):
         res_states = []
         last_loop_node = None
         for loop_node, loop_state_nodes in loops_and_states:
-            if not res_states or last_loop_node.index_range.end != loop_node.index_range.start:
+            if (
+                not res_states
+                or last_loop_node.index_range.end != loop_node.index_range.start
+                or not all(
+                    name in last_loop_node.read_accesses for name in loop_node.read_accesses.keys()
+                )
+            ):
                 res_states.append(
                     self._make_cache_init_state(
-                        [loop_node], read_accesses=read_accesses, local_name_map=local_name_map
+                        [loop_node],
+                        read_accesses=read_accesses,
+                        local_name_map=local_name_map,
                     )
                 )
             (fill_state, *loop_states, flush_state, shift_state,) = self._make_localcache_states(
