@@ -111,10 +111,12 @@ def pre_expand_trafos(sdfg: dace.SDFG):
         if isinstance(node, StencilComputation):
             if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
                 expansion_priority = [
+                    ["Sections", "Stages", "K", "J", "I"],
                     ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
                 ]
             else:
                 expansion_priority = [
+                    ["J", "I", "Sections", "Stages", "K"],
                     ["TileJ", "TileI", "Sections", "KLoop", "Stages", "JMap", "IMap"],
                 ]
             for exp in expansion_priority:
