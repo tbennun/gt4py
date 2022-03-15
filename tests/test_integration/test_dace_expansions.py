@@ -1,13 +1,18 @@
 import copy
 from functools import lru_cache
 
-import cupy
+
+try:
+    import cupy
+except ImportError:
+    cupy = None
 import dace
 import hypothesis as hyp
 import numpy as np
 import pytest
 from hypothesis import strategies as hyp_st
 
+from gt4py import backend as gt_backend
 from gt4py import gtscript
 from gt4py import storage as gt_storage
 from gtc.dace.nodes import StencilComputation
@@ -108,7 +113,10 @@ def test_generation(name, backend, data: hyp_st.DataObject):
         # this config is so that gt4py storages are allowed as arguments
         with dace.config.set_temporary("compiler", "allow_view_arguments", value=True):
             csdfg(**input_data)
-        cupy.cuda.Device(0).synchronize()
+
+        if gt_backend.from_name(backend).storage_info["device"] == "gpu":
+            cupy.cuda.Device(0).synchronize()
+
     except Exception:
         print("FAILED (CALL)")
         raise

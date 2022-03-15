@@ -3,7 +3,10 @@ from typing import Any, Dict, List, Tuple
 import dace
 
 import eve
+from eve.iterators import iter_tree
+from gtc import common
 from gtc import daceir as dcir
+from gtc import oir
 
 from .utils import union_node_access_infos
 
@@ -161,47 +164,183 @@ propagate_field_decls = FieldDeclPropagator().apply
 
 
 class MakeLocalCaches(eve.NodeTranslator):
-    def _make_cache_init_state(self, loops, *, read_accesses, local_name_map):
-        from .utils import union_node_access_infos, union_node_grid_subsets
+    def _write_before_read_fields(self, axis, node):
+        for state_machine in iter_tree(node).if_isinstance(dcir.StateMachine):
+            if state_machine is node:
+                continue
+            res = self._write_before_read_fields(axis, state_machine)
+            name_map = {v: k for k, v in state_machine.name_map.items()}
+            res = {name_map[k] for k in res}
+            return res
 
-        read_accesses, write_accesses, field_accesses = union_node_access_infos(
-            loops[0].loop_states
-        )
+        tasklets = iter_tree(node).if_isinstance(dcir.Tasklet).to_list()
 
-        axis = loops[0].axis
-        cache_field_reads = {
-            name: read_accesses[name] for name in local_name_map.keys() if name in read_accesses
+        # guaranteed/maybe due to masks
+        guaranteed_write_first_fields = set()
+        maybe_read_first_fields = set()
+
+        def _iterate_access_order(node, is_write=False, is_masked=None):
+
+            if isinstance(node, list):
+                for n in node:
+                    yield from _iterate_access_order(n)
+            elif isinstance(node, dcir.Tasklet):
+                yield from _iterate_access_order(node.stmts)
+            elif isinstance(node, oir.MaskStmt):
+                yield from _iterate_access_order(node.mask, is_write=False, is_masked=is_masked)
+                yield from _iterate_access_order(node.body, is_masked=True)
+            elif isinstance(node, oir.AssignStmt):
+                yield from _iterate_access_order(node.right, is_write=False, is_masked=is_masked)
+                yield from _iterate_access_order(node.left, is_write=True, is_masked=is_masked)
+            else:
+                for node in iter_tree(node).if_isinstance(common.FieldAccess):
+                    yield node, is_write, is_masked
+
+        for acc, is_write, is_masked in _iterate_access_order(tasklets):
+            if is_write and not is_masked:
+                if acc.name not in maybe_read_first_fields:
+                    guaranteed_write_first_fields.add(acc.name)
+            elif not is_write and acc.name not in guaranteed_write_first_fields:
+                maybe_read_first_fields.add(acc.name)
+
+        tasklet_name_map = {k: v for tasklet in tasklets for k, v in tasklet.name_map.items()}
+        name_map = {v: k for k, v in tasklet_name_map.items()}
+        res = {name_map[k] for k in guaranteed_write_first_fields}
+        return res
+
+    def _subsets_diff(self, axis, left_subsets, right_subsets):
+        res = dict(left_subsets)
+        for name, right_subset in right_subsets.items():
+            if name not in left_subsets:
+                continue
+            left_subset = left_subsets[name]
+            if right_subset is None:
+                continue
+            if left_subset is None:
+                res[name] = None
+                continue
+            assert isinstance(left_subset.intervals[axis], dcir.IndexWithExtent) and isinstance(
+                left_subset.intervals[axis], dcir.IndexWithExtent
+            )
+            left_idx, right_idx = left_subset.intervals[axis], right_subset.intervals[axis]
+
+            if left_idx.extent == right_idx.extent:
+                # subtract entire subset=empty
+                res[name] = None
+            elif (
+                left_idx.extent[0] >= right_idx.extent[0]
+                and left_idx.extent[1] <= right_idx.extent[1]
+            ):
+                # subtract more than entire subset=empty
+                res[name] = None
+            elif (
+                left_idx.extent[0] < right_idx.extent[0]
+                and left_idx.extent[1] > right_idx.extent[1]
+            ):
+                # result not contiguous: keep original subset as bounding box
+                res[name] = left_subset
+            else:
+                # partial overlaps:
+                if left_idx.extent[0] < right_idx.extent[0]:
+                    extent = left_idx.extent[0], right_idx.extent[0]
+                else:
+                    extent = right_idx.extent[1], left_idx.extent[1]
+                res[name] = left_subset.set_interval(
+                    axis, dcir.IndexWithExtent(axis=axis, value=left_idx.value, extent=extent)
+                )
+        for name, subset in left_subsets.items():
+            res.setdefault(name, subset)
+        return res
+
+    def _get_cache_read_subset(self, axis, loop_states, local_name_map):
+        read_accesses, write_accesses, _ = union_node_access_infos(list(loop_states))
+        read_subsets = {
+            name: info.grid_subset for name, info in read_accesses.items() if name in local_name_map
         }
-        cache_populate_accesses = dict()
-        for name, info in cache_field_reads.items():
-            interval = info.grid_subset.intervals[axis]
-            extent = interval.extent
-            cache_populate_accesses[name] = dcir.FieldAccessInfo(
-                grid_subset=info.grid_subset.set_interval(
-                    axis,
-                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
-                ),
-                global_grid_subset=info.global_grid_subset,
-                dynamic_access=info.dynamic_access,
-                variable_offset_axes=info.variable_offset_axes,
+        write_subsets = {
+            name: info.grid_subset
+            for name, info in write_accesses.items()
+            if name in local_name_map
+        }
+        write_before_read_fields = self._write_before_read_fields(axis, loop_states)
+        write_before_read_subsets = {
+            k: v for k, v in write_subsets.items() if k in write_before_read_fields
+        }
+        required_cache_subsets = self._subsets_diff(axis, read_subsets, write_before_read_subsets)
+        return {k: v for k, v in required_cache_subsets.items() if k in local_name_map}
+
+    def _get_fill_subsets(self, axis, loop_states, stride, local_name_map):
+        read_accesses, write_accesses, _ = union_node_access_infos(list(loop_states))
+        read_subsets = {name: info.grid_subset for name, info in read_accesses.items()}
+        write_before_read_fields = self._write_before_read_fields(axis, loop_states)
+        if stride > 0:
+            fill_fields = set(
+                name
+                for name in write_accesses.keys()
+                if name in read_accesses
+                and axis in read_accesses[name].grid_subset.intervals
+                and read_accesses[name].grid_subset.intervals[axis].extent[1] > 0
+            ) | set(
+                name
+                for name in write_accesses.keys()
+                if name in read_accesses
+                and axis in read_accesses[name].grid_subset.intervals
+                and read_accesses[name].grid_subset.intervals[axis].extent[1] == 0
+                and name not in write_before_read_fields
             )
 
-        start_grid_subset = set_grid_subset_idx(
-            axis, loops[0].grid_subset, loops[0].index_range.start
-        )
+        else:
+            fill_fields = set(
+                name
+                for name in write_accesses.keys()
+                if name in read_accesses
+                and axis in read_accesses[name].grid_subset.intervals
+                and read_accesses[name].grid_subset.intervals[axis].extent[0] < 0
+            ) | set(
+                name
+                for name in write_accesses.keys()
+                if name in read_accesses
+                and axis in read_accesses[name].grid_subset.intervals
+                and read_accesses[name].grid_subset.intervals[axis].extent[0] == 0
+                and name not in write_before_read_fields
+            )
+        fill_fields |= {
+            name
+            for name in set(read_accesses.keys()) - set(write_accesses.keys())
+            if name in local_name_map
+        }
 
-        def set_local_names(access_infos):
-            return {local_name_map[k]: v for k, v in access_infos.items()}
+        fill_subsets = dict()
+        for name in fill_fields:
+            idx = read_subsets[name].intervals[axis]
+            assert isinstance(idx, dcir.IndexWithExtent)
+            if stride > 0:
+                extent = idx.extent[1], idx.extent[1]
+            else:
+                extent = idx.extent[0], idx.extent[0]
+            fill_subsets[name] = read_subsets[name].set_interval(
+                axis, dcir.IndexWithExtent(axis=axis, value=idx.value, extent=extent)
+            )
+        return {k: v for k, v in fill_subsets.items() if k in local_name_map}
 
-        def set_start_idx(access_infos):
-            return set_idx(axis, access_infos, loops[0].index_range.start)
+    def _shift_subsets(self, axis, subsets, offset):
+        res = dict()
+        for name, subset in subsets.items():
+            res[name] = subset.set_interval(axis, subset.intervals[axis].shifted(offset))
+        return res
 
-        return dcir.CopyState(
-            read_accesses=set_start_idx(cache_populate_accesses),
-            write_accesses=set_local_names(cache_populate_accesses),
-            name_map=local_name_map,
-            grid_subset=start_grid_subset,
-        )
+    def _set_access_info_subset(self, access_infos, subsets):
+        res = dict(access_infos)
+        for name, subset in subsets.items():
+            if name in access_infos:
+                access_info = access_infos[name]
+                res[name] = dcir.FieldAccessInfo(
+                    grid_subset=subset,
+                    global_grid_subset=access_info.global_grid_subset,
+                    dynamic_access=access_info.dynamic_access,
+                    variable_offset_axes=access_info.variable_offset_axes,
+                )
+        return res
 
     def _make_localcache_states(
         self,
@@ -212,65 +351,34 @@ class MakeLocalCaches(eve.NodeTranslator):
         context_write_accesses,
         context_field_accesses,
         local_name_map,
+        cache_subsets,
     ):
+
+        # also, init
         from .utils import union_node_access_infos, union_node_grid_subsets
 
-        axis = loop.axis
         grid_subset = union_node_grid_subsets(list(loop_states))
         read_accesses, write_accesses, field_accesses = union_node_access_infos(list(loop_states))
-        cache_field_reads = {
-            name: read_accesses[name] for name in local_name_map.keys() if name in read_accesses
+        axis = loop.axis
+
+        cache_read_subsets = self._get_cache_read_subset(axis, loop_states, local_name_map)
+        fill_subsets = self._get_fill_subsets(
+            axis, loop_states, loop.index_range.stride, local_name_map
+        )
+        flush_subsets = {
+            name: info.grid_subset
+            for name, info in write_accesses.items()
+            if name in local_name_map
         }
-        cache_field_writes = {
-            name: write_accesses[name] for name in local_name_map.keys() if name in write_accesses
-        }
-        cache_populate_accesses = dict()
-        for name, info in cache_field_reads.items():
-            interval = info.grid_subset.intervals[axis]
-            extent = interval.extent
-            cache_populate_accesses[name] = dcir.FieldAccessInfo(
-                grid_subset=info.grid_subset.set_interval(
-                    axis,
-                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
-                ),
-                global_grid_subset=info.global_grid_subset,
-                dynamic_access=info.dynamic_access,
-                variable_offset_axes=info.variable_offset_axes,
-            )
-        cache_field_reads = {
-            name: read_accesses[name] for name in local_name_map.keys() if name in read_accesses
-        }
-        next_value_accesses = dict()
-        for name, info in cache_field_reads.items():
-            interval = info.grid_subset.intervals[axis]
-            if loop.index_range.stride < 0:
-                extent = interval.extent[0], interval.extent[0]
-            else:
-                extent = interval.extent[1], interval.extent[1]
-            next_value_accesses[name] = dcir.FieldAccessInfo(
-                grid_subset=info.grid_subset.set_interval(
-                    axis,
-                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
-                ),
-                global_grid_subset=info.global_grid_subset,
-                dynamic_access=info.dynamic_access,
-                variable_offset_axes=info.variable_offset_axes,
-            )
-        written_value_accesses = dict()
-        for name, info in cache_field_writes.items():
-            if name not in write_accesses:
-                continue
-            interval = info.grid_subset.intervals[axis]
-            extent = [0, 0]
-            written_value_accesses[name] = dcir.FieldAccessInfo(
-                grid_subset=info.grid_subset.set_interval(
-                    axis,
-                    dcir.IndexWithExtent(axis=axis, value=interval.value, extent=extent),
-                ),
-                global_grid_subset=info.global_grid_subset,
-                dynamic_access=info.dynamic_access,
-                variable_offset_axes=info.variable_offset_axes,
-            )
+        init_subsets = self._subsets_diff(
+            axis, self._subsets_diff(axis, cache_read_subsets, cache_subsets), fill_subsets
+        )
+
+        shift_subsets = self._subsets_diff(axis, cache_read_subsets, fill_subsets)
+        cache_subsets.clear()
+        cache_subsets.update(
+            {k: v for k, v in shift_subsets.items() if v is not None},
+        )
 
         def set_local_names(access_infos):
             return {local_name_map[k]: v for k, v in access_infos.items()}
@@ -289,28 +397,67 @@ class MakeLocalCaches(eve.NodeTranslator):
                 )
             return res
 
+        init_accesses = self._set_access_info_subset(
+            {
+                k: v
+                for k, v in field_accesses.items()
+                if k in init_subsets and init_subsets[k] is not None
+            },
+            init_subsets,
+        )
+        init_state = dcir.CopyState(
+            grid_subset=grid_subset,
+            read_accesses=set_idx(axis, init_accesses, loop.index_range.start),
+            write_accesses=set_local_names(init_accesses),
+            name_map=local_name_map,
+        )
+
+        fill_accesses = self._set_access_info_subset(
+            {
+                k: v
+                for k, v in field_accesses.items()
+                if k in fill_subsets and fill_subsets[k] is not None
+            },
+            fill_subsets,
+        )
         fill_state = dcir.CopyState(
             grid_subset=grid_subset,
-            read_accesses=next_value_accesses,
-            write_accesses=set_local_names(next_value_accesses),
+            read_accesses=fill_accesses,
+            write_accesses=set_local_names(fill_accesses),
             name_map=local_name_map,
         )
         loop_states = rename_field_accesses(loop_states, local_name_map=local_name_map)
+
+        flush_accesses = self._set_access_info_subset(
+            {
+                k: v
+                for k, v in field_accesses.items()
+                if k in flush_subsets and flush_subsets[k] is not None
+            },
+            flush_subsets,
+        )
         flush_state = dcir.CopyState(
             grid_subset=grid_subset,
-            read_accesses=set_local_names(written_value_accesses),
-            write_accesses=written_value_accesses,
+            read_accesses=set_local_names(flush_accesses),
+            write_accesses=flush_accesses,
             name_map={v: k for k, v in local_name_map.items()},
         )
-        shift_state = dcir.CopyState(
-            read_accesses=set_local_names(cache_populate_accesses),
-            write_accesses=shift(
-                set_local_names(cache_populate_accesses), -loop.index_range.stride
-            ),
-            name_map={v: v for v in local_name_map.values()},
-            grid_subset=grid_subset,
+
+        shift_accesses = self._set_access_info_subset(
+            {
+                k: v
+                for k, v in field_accesses.items()
+                if k in shift_subsets and shift_subsets[k] is not None
+            },
+            shift_subsets,
         )
-        return fill_state, *loop_states, flush_state, shift_state
+        shift_state = dcir.CopyState(
+            grid_subset=grid_subset,
+            read_accesses=shift(set_local_names(shift_accesses), loop.index_range.stride),
+            write_accesses=set_local_names(shift_accesses),
+            name_map={v: v for v in local_name_map.values()},
+        )
+        return init_state, (fill_state, *loop_states, flush_state, shift_state)
 
     def _process_state_sequence(self, states, *, localcache_infos):
 
@@ -336,64 +483,69 @@ class MakeLocalCaches(eve.NodeTranslator):
         for name in read_accesses.keys():
             if axis not in field_accesses[name].grid_subset.intervals:
                 continue
-            interval = field_accesses[name].grid_subset.intervals[axis]
-            if isinstance(interval, dcir.IndexWithExtent) and interval.size > 1:
-                cache_fields.add(name)
+            if axis in field_accesses[name].grid_subset.intervals:
+                access = field_accesses[name]
+                if access is not None:
+                    interval = access.grid_subset.intervals[axis]
+                else:
+                    interval = None
+                dynamic_write = (
+                    write_accesses[name].dynamic_access if name in write_accesses else False
+                )
+                if (
+                    name in localcache_infos.fields
+                    and isinstance(interval, dcir.IndexWithExtent)
+                    and interval.size > 1
+                    and not dynamic_write
+                ):
+                    cache_fields.add(name)
 
         if not cache_fields:
             return states, {}
 
-        cache_fields = set()
-        for name in read_accesses.keys():
-            if axis in field_accesses[name].grid_subset.intervals:
-                read_access = read_accesses.get(name, None)
-                if read_access is not None:
-                    read_interval = read_access.grid_subset.intervals[axis]
-                else:
-                    read_interval = None
-                if (
-                    name in localcache_infos.fields
-                    and isinstance(read_interval, dcir.IndexWithExtent)
-                    and read_interval.size > 1
-                ):
-                    cache_fields.add(name)
         local_name_map = {k: f"__local_{k}" for k in cache_fields}
 
         res_states = []
         last_loop_node = None
+        cache_subsets = dict()
         for loop_node, loop_state_nodes in loops_and_states:
-            if (
-                not res_states
-                or last_loop_node.index_range.end != loop_node.index_range.start
-                or not all(
-                    name in last_loop_node.read_accesses for name in loop_node.read_accesses.keys()
-                )
-            ):
-                res_states.append(
-                    self._make_cache_init_state(
-                        [loop_node],
-                        read_accesses=read_accesses,
-                        local_name_map=local_name_map,
-                    )
-                )
-            (fill_state, *loop_states, flush_state, shift_state,) = self._make_localcache_states(
+            if last_loop_node is not None:
+                if (
+                    last_loop_node.index_range.end == loop_node.index_range.start
+                    and last_loop_node.index_range.stride == loop_node.index_range.stride
+                ):
+                    cache_subsets = cache_subsets
+                else:
+                    # TODO avoid re-init in non-contiguous cases
+                    cache_subsets = dict()
+
+            init_state, (
+                fill_state,
+                *loop_states,
+                flush_state,
+                shift_state,
+            ) = self._make_localcache_states(
                 loop_node,
                 loop_state_nodes,
                 context_read_accesses=read_accesses,
                 context_write_accesses=write_accesses,
                 context_field_accesses=field_accesses,
                 local_name_map=local_name_map,
+                cache_subsets=cache_subsets,
             )
 
-            res_states.append(
-                dcir.DomainLoop(
-                    loop_states=[fill_state, *loop_states, flush_state, shift_state],
-                    axis=loop_node.axis,
-                    index_range=loop_node.index_range,
-                    grid_subset=loop_node.grid_subset,
-                    read_accesses=loop_node.read_accesses,
-                    write_accesses=loop_node.write_accesses,
-                )
+            res_states.extend(
+                [
+                    init_state,
+                    dcir.DomainLoop(
+                        loop_states=[fill_state, *loop_states, flush_state, shift_state],
+                        axis=loop_node.axis,
+                        index_range=loop_node.index_range,
+                        grid_subset=loop_node.grid_subset,
+                        read_accesses=loop_node.read_accesses,
+                        write_accesses=loop_node.write_accesses,
+                    ),
+                ]
             )
             last_loop_node = loop_node
         return res_states, local_name_map
