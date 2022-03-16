@@ -280,7 +280,10 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         except KeyError as error:
             raise NotImplementedError("Not implemented NativeFunction encountered.") from error
 
-    NativeFuncCall = as_mako("${func}(${','.join(args)})")
+    def visit_NativeFuncCall(self, call: common.NativeFuncCall, **kwargs: Any) -> str:
+        if call.func == common.NativeFunction.POW:
+            return f"{self.visit(call.args[0], **kwargs)} ** {self.visit(call.args[1], **kwargs)}"
+        return f"{self.visit(call.func, **kwargs)}({','.join([self.visit(a, **kwargs) for a in call.args])})"
 
     def visit_DataType(self, dtype: common.DataType, **kwargs: Any) -> str:
         if dtype == common.DataType.BOOL:
