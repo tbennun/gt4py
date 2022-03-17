@@ -1065,6 +1065,15 @@ class StencilComputation(library.LibraryNode):
             result.update(map(str, v.free_symbols))
         return result
 
+    def has_splittable_regions(self):
+        for he in self.oir_node.iter_tree().if_isinstance(oir.HorizontalExecution):
+            if not he.declarations and any(
+                isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, common.HorizontalMask)
+                for stmt in he.body
+            ):
+                return True
+        return False
+
     #
     # def __eq__(self, other):
     #     super(StencilComputation, self).__eq__(other)
