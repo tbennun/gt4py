@@ -187,14 +187,21 @@ class DomainInterval(Node):
         )
 
     @classmethod
-    def intersection(cls, first, second):
-        assert (first.start <= second.end and first.end >= second.start) or (
-            second.start <= first.end and second.end >= first.start
+    def intersection(cls, axis, first, second):
+        first_start = first.start if first.start is not None else second.start
+        first_end = first.end if first.end is not None else second.end
+        second_start = second.start if second.start is not None else first.start
+        second_end = second.end if second.end is not None else first_end.end
+
+        assert (first_start <= second_end and first_end >= second_start) or (
+            second_start <= first_end and second_end >= first_start
         )
-        return cls(
-            start=max(first.start, second.start),
-            end=min(first.end, second.end),
-        )
+
+        start = max(first_start, second_start)
+        start = AxisBound(axis=axis, level=start.level, offset=start.offset)
+        end = min(first_end, second_end)
+        end = AxisBound(axis=axis, level=end.level, offset=end.offset)
+        return cls(start=start, end=end)
 
     @property
     def idx_range(self):

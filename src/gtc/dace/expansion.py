@@ -32,6 +32,7 @@ import gtc.oir as oir
 from eve import NodeTranslator, NodeVisitor, codegen
 from eve.codegen import FormatTemplate as as_fmt
 from eve.codegen import MakoTemplate as as_mako
+from eve.iterators import iter_tree
 from gt4py import definitions as gt_def
 from gt4py.definitions import Extent
 from gtc import daceir as dcir
@@ -49,7 +50,12 @@ from gtc.dace.nodes import (
 from gtc.dace.utils import get_axis_bound_str, get_tasklet_symbol
 from gtc.passes.oir_optimizations.utils import AccessCollector
 
-from .utils import compute_dcir_access_infos, make_subset_str
+from .utils import (
+    compute_dcir_access_infos,
+    make_subset_str,
+    remove_horizontal_region,
+    split_horizontal_exeuctions_regions,
+)
 
 
 def make_access_subset_dict(
@@ -735,6 +741,51 @@ class DaCeIRBuilder(NodeTranslator):
                     )
                 )
             else:
+
+                if (
+                    axis in dcir.Axis.horizontal_axes()
+                    and isinstance(interval, dcir.DomainInterval)
+                    and all(
+                        isinstance(stmt, oir.MaskStmt)
+                        and isinstance(stmt.mask, common.HorizontalMask)
+                        for tasklet in iter_tree(scope_nodes).if_isinstance(dcir.Tasklet)
+                        for stmt in tasklet.stmts
+                    )
+                    and len(
+                        set(
+                            (
+                                None
+                                if mask.intervals[axis.to_idx()].start is None
+                                else mask.intervals[axis.to_idx()].start.level,
+                                None
+                                if mask.intervals[axis.to_idx()].start is None
+                                else mask.intervals[axis.to_idx()].start.offset,
+                                None
+                                if mask.intervals[axis.to_idx()].end is None
+                                else mask.intervals[axis.to_idx()].end.level,
+                                None
+                                if mask.intervals[axis.to_idx()].end is None
+                                else mask.intervals[axis.to_idx()].end.offset,
+                            )
+                            for mask in iter_tree(scope_nodes).if_isinstance(common.HorizontalMask)
+                        )
+                    )
+                    == 1
+                ):
+                    horizontal_mask_interval = next(
+                        iter(
+                            (
+                                mask.intervals[axis.to_idx()]
+                                for mask in iter_tree(scope_nodes).if_isinstance(
+                                    common.HorizontalMask
+                                )
+                            )
+                        )
+                    )
+                    interval = dcir.DomainInterval.intersection(
+                        axis, horizontal_mask_interval, interval
+                    )
+                    scope_nodes = remove_horizontal_region(scope_nodes, axis)
                 assert iteration.kind == "contiguous"
                 read_accesses = {
                     key: access_info.apply_iteration(dcir.GridSubset.from_interval(interval, axis))
@@ -1458,6 +1509,7 @@ class StencilComputationExpansion(dace.library.ExpandTransformation):
     def expansion(
         node: "StencilComputation", parent_state: dace.SDFGState, parent_sdfg: dace.SDFG
     ) -> dace.nodes.NestedSDFG:
+        split_horizontal_exeuctions_regions(node)
         start, end = (
             node.oir_node.sections[0].interval.start,
             node.oir_node.sections[0].interval.end,

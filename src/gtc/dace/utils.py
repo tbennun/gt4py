@@ -44,6 +44,8 @@ from gtc.passes.oir_optimizations.utils import AccessCollector, GenericAccess
 
 if TYPE_CHECKING:
     from gtc import daceir as dcir
+if TYPE_CHECKING:
+    from .nodes import StencilComputation
 
 
 if TYPE_CHECKING:
@@ -1066,9 +1068,9 @@ class AccessInfoCollector(NodeVisitor):
         for axis in dcir.Axis.horizontal_axes():
             iteration_interval = he_grid.intervals[axis]
             mask_interval = res.get(axis, iteration_interval)
-            res[axis] = dcir.DomainInterval.intersection(iteration_interval, mask_interval).shifted(
-                offset[axis.to_idx()]
-            )
+            res[axis] = dcir.DomainInterval.intersection(
+                axis, iteration_interval, mask_interval
+            ).shifted(offset[axis.to_idx()])
         return dcir.GridSubset(intervals=res)
 
     def _make_access_info(
@@ -1351,3 +1353,106 @@ def collect_toplevel_iteration_nodes(
     collection: List[dcir.IterationNode] = []
     IterationNodeCollector().visit(list_or_node, collection=collection)
     return collection
+
+
+class HorizontalIntervalRemover(eve.NodeMutator):
+    def visit_HorizontalMask(self, node: common.HorizontalMask, *, axis: "dcir.Axis"):
+        mask_attrs = dict(i=node.i, j=node.j)
+        mask_attrs[axis.lower()] = self.visit(getattr(node, axis.lower()))
+        return common.HorizontalMask(**mask_attrs)
+
+    def visit_HorizontalInterval(self, node: common.HorizontalInterval):
+        return common.HorizontalInterval(start=None, end=None)
+
+
+class HorizontalMaskRemover(eve.NodeMutator):
+    def visit_Tasklet(self, node: "dcir.Tasklet"):
+        from gtc import daceir as dcir
+
+        res_body = []
+        for stmt in node.stmts:
+            newstmt = self.visit(stmt)
+            if isinstance(newstmt, list):
+                res_body.extend(newstmt)
+            else:
+                res_body.append(newstmt)
+        return dcir.Tasklet(
+            stmts=res_body,
+            name_map=node.name_map,
+            read_accesses=node.read_accesses,
+            write_accesses=node.write_accesses,
+        )
+
+    def visit_MaskStmt(self, node: oir.MaskStmt):
+        if isinstance(node.mask, common.HorizontalMask):
+            if (
+                node.mask.i.start is None
+                and node.mask.j.start is None
+                and node.mask.i.end is None
+                and node.mask.j.end is None
+            ):
+                return self.generic_visit(node.body)
+        return self.generic_visit(node)
+
+
+def remove_horizontal_region(node, axis):
+    intervals_removed = HorizontalIntervalRemover().visit(node, axis=axis)
+    return HorizontalMaskRemover().visit(intervals_removed)
+
+
+class HorizontalExecutionSplitter(eve.NodeTranslator):
+    def visit_HorizontalExecution(self, node: oir.HorizontalExecution, *, extents, library_node):
+        if any(node.iter_tree().if_isinstance(oir.LocalScalar)):
+            extents.append(library_node.get_extents(node))
+            return node
+        last_stmts = []
+        res_he_stmts = [last_stmts]
+        for stmt in node.body:
+            if last_stmts and (
+                (isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, common.HorizontalMask))
+                or (
+                    (
+                        isinstance(last_stmts[0], oir.MaskStmt)
+                        and isinstance(last_stmts[0].mask, common.HorizontalMask)
+                    )
+                )
+            ):
+                last_stmts = [stmt]
+                res_he_stmts.append(last_stmts)
+            else:
+                last_stmts.append(stmt)
+
+        res_hes = []
+        for stmts in res_he_stmts:
+            accessed_scalars = set(
+                acc.name for acc in iter_tree(stmts).if_isinstance(oir.ScalarAccess)
+            )
+            declarations = [decl for decl in node.declarations if decl.name in accessed_scalars]
+            res_he = oir.HorizontalExecution(declarations=declarations, body=stmts)
+            res_hes.append(res_he)
+            extents.append(library_node.get_extents(node))
+        return res_hes
+
+    def visit_VerticalLoopSection(self, node: oir.VerticalLoopSection, **kwargs):
+        res_hes = []
+        for he in node.horizontal_executions:
+            new_he = self.visit(he, **kwargs)
+            if isinstance(new_he, list):
+                res_hes.extend(new_he)
+            else:
+                res_hes.append(new_he)
+        return oir.VerticalLoopSection(interval=node.interval, horizontal_executions=res_hes)
+
+
+def split_horizontal_exeuctions_regions(node: "StencilComputation"):
+
+    extents = []
+
+    node.oir_node = HorizontalExecutionSplitter().visit(
+        node.oir_node, library_node=node, extents=extents
+    )
+    ctr = 0
+    for i, section in enumerate(node.oir_node.sections):
+        for j, he in enumerate(section.horizontal_executions):
+            node.extents[j * len(node.oir_node.sections) + i] = extents[ctr]
+            ctr += 1

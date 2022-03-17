@@ -727,7 +727,7 @@ class StencilComputation(library.LibraryNode):
     tile_sizes = dace.properties.DictProperty(
         key_type=str,
         value_type=int,
-        default={dcir.Axis.I: 8, dcir.Axis.J: 8, dcir.Axis.K: 8},
+        default={dcir.Axis.I: 64, dcir.Axis.J: 8, dcir.Axis.K: 8},
     )
     device = dace.properties.EnumProperty(
         dtype=dace.DeviceType, default=dace.DeviceType.CPU, allow_none=True
