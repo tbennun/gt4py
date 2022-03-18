@@ -112,7 +112,7 @@ def pre_expand_trafos(sdfg: dace.SDFG):
             print(node.name, node.has_splittable_regions())
             if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
                 expansion_priority = []
-                if node.has_splittable_regions():
+                if node.has_splittable_regions() and 'corner' in node.label:
                     expansion_priority.append(["Sections", "Stages", "J", "I", "K"])
 
                 expansion_priority.extend(
