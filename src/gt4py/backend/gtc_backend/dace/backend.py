@@ -109,12 +109,8 @@ def pre_expand_trafos(sdfg: dace.SDFG):
     sdfg.simplify()
     for node, _ in sdfg.all_nodes_recursive():
         if isinstance(node, StencilComputation):
-            print(node.name, node.has_splittable_regions())
             if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
                 expansion_priority = []
-                if node.has_splittable_regions():
-                    expansion_priority.append(["Sections", "Stages", "J", "I", "K"])
-
                 expansion_priority.extend(
                     [
                         ["Sections", "Stages", "K", "J", "I"],
