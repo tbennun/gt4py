@@ -94,7 +94,10 @@ def iteration_space_compatible(
 
 
 def no_regions(node: HorizontalExecutionLibraryNode):
-    return len(node.oir_node.iter_tree().if_isinstance(common.HorizontalMask).to_list()) == 0
+    for he in node.as_oir().iter_tree().if_isinstance(oir.HorizontalExecution):
+        for stmt in he.body:
+            if isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, oir.HorizontalMask):
+                return False
 
 
 def unwire_access_node(

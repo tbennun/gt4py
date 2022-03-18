@@ -1219,7 +1219,8 @@ class DaceStrMaker:
             for decl in stencil.params + stencil.declarations
             if isinstance(decl, oir.FieldDecl)
         }
-        self.block_extents = lambda he: compute_horizontal_block_extents(stencil)[id(he)]
+        block_extents = compute_horizontal_block_extents(stencil)
+        self.block_extents = lambda he: block_extents[id(he)]
 
         self.access_infos = compute_dcir_access_infos(
             stencil,
