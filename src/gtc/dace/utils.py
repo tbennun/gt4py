@@ -1411,11 +1411,15 @@ class HorizontalExecutionSplitter(eve.NodeTranslator):
             for interval in mask.intervals:
                 if interval.start is None and interval.end is None:
                     return True
-                if interval.start is None and interval.end.level == common.LevelMarker.END:
+                elif interval.start is None and interval.end.level == common.LevelMarker.END:
                     return True
-                if interval.end is None and interval.start.level == common.LevelMarker.START:
+                elif interval.end is None and interval.start.level == common.LevelMarker.START:
                     return True
-                if interval.start.level != interval.end.level:
+                elif (
+                    interval.start is not None
+                    and interval.end is not None
+                    and interval.start.level != interval.end.level
+                ):
                     return True
             return False
 
