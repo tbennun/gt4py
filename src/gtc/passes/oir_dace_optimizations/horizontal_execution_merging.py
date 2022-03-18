@@ -78,9 +78,6 @@ def offsets_match(
     return not conflicting
 
 
-from gtc import common
-
-
 def iteration_space_compatible(
     left: HorizontalExecutionLibraryNode,
     right: HorizontalExecutionLibraryNode,
@@ -91,13 +88,6 @@ def iteration_space_compatible(
         return True
     # TODO allow more cases where writes and reads to/from API fields are unchanged and extent is not affected
     return False
-
-
-def no_regions(node: HorizontalExecutionLibraryNode):
-    for he in node.as_oir().iter_tree().if_isinstance(oir.HorizontalExecution):
-        for stmt in he.body:
-            if isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, oir.HorizontalMask):
-                return False
 
 
 def unwire_access_node(
@@ -233,11 +223,8 @@ class GraphMerging(SingleStateTransformation):
         if len(protected_intermediate_names & output_names) > 0:
             return False
 
-        return (
-            offsets_match(left, right)
-            and iteration_space_compatible(left, right, self.api_fields)
-            and no_regions(left)
-            and no_regions(right)
+        return offsets_match(left, right) and iteration_space_compatible(
+            left, right, self.api_fields
         )
 
     def apply(self, state, sdfg: dace.SDFG) -> None:

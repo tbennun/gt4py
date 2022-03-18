@@ -1406,15 +1406,33 @@ class HorizontalExecutionSplitter(eve.NodeTranslator):
         if any(node.iter_tree().if_isinstance(oir.LocalScalar)):
             extents.append(library_node.get_extents(node))
             return node
+
+        def includes_inner(mask: oir.HorizontalMask):
+            for interval in mask.intervals:
+                if interval.start is None and interval.end is None:
+                    return True
+                if interval.start is None and interval.end.level == common.LevelMarker.END:
+                    return True
+                if interval.end is None and interval.start.level == common.LevelMarker.START:
+                    return True
+                if interval.start.level != interval.end.level:
+                    return True
+            return False
+
         last_stmts = []
         res_he_stmts = [last_stmts]
         for stmt in node.body:
             if last_stmts and (
-                (isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, common.HorizontalMask))
+                (
+                    isinstance(stmt, oir.MaskStmt)
+                    and isinstance(stmt.mask, common.HorizontalMask)
+                    and not includes_inner(stmt.mask)
+                )
                 or (
                     (
                         isinstance(last_stmts[0], oir.MaskStmt)
                         and isinstance(last_stmts[0].mask, common.HorizontalMask)
+                        and not includes_inner(last_stmts[0].mask)
                     )
                 )
             ):
