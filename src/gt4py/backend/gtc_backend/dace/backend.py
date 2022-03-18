@@ -111,10 +111,16 @@ def pre_expand_trafos(sdfg: dace.SDFG):
         if isinstance(node, StencilComputation):
             print(node.name, node.has_splittable_regions())
             if node.oir_node.loop_order == common.LoopOrder.PARALLEL:
-                expansion_priority = [
-                    ["Sections", "Stages", "K", "J", "I"],
-                    ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
-                ]
+                expansion_priority = []
+                if node.has_splittable_regions():
+                    expansion_priority.append(["Sections", "Stages", "J", "I", "K"])
+
+                expansion_priority.expand(
+                    [
+                        ["Sections", "Stages", "K", "J", "I"],
+                        ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
+                    ]
+                )
             else:
                 expansion_priority = [
                     ["J", "I", "Sections", "Stages", "K"],
