@@ -1408,20 +1408,23 @@ class HorizontalExecutionSplitter(eve.NodeTranslator):
             return node
 
         def includes_inner(mask: oir.HorizontalMask):
+            includes_inner = []
             for interval in mask.intervals:
                 if interval.start is None and interval.end is None:
-                    return True
+                    includes_inner.append(True)
                 elif interval.start is None and interval.end.level == common.LevelMarker.END:
-                    return True
+                    includes_inner.append(True)
                 elif interval.end is None and interval.start.level == common.LevelMarker.START:
-                    return True
+                    includes_inner.append(True)
                 elif (
                     interval.start is not None
                     and interval.end is not None
                     and interval.start.level != interval.end.level
                 ):
-                    return True
-            return False
+                    includes_inner.append(True)
+                else:
+                    includes_inner.append(False)
+            return all(includes_inner)
 
         last_stmts = []
         res_he_stmts = [last_stmts]
