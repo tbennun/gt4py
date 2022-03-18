@@ -115,7 +115,7 @@ def pre_expand_trafos(sdfg: dace.SDFG):
                 if node.has_splittable_regions():
                     expansion_priority.append(["Sections", "Stages", "J", "I", "K"])
 
-                expansion_priority.expand(
+                expansion_priority.extend(
                     [
                         ["Sections", "Stages", "K", "J", "I"],
                         ["TileJ", "TileI", "Sections", "KMap", "Stages", "JMap", "IMap"],
