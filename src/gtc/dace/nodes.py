@@ -41,6 +41,7 @@ from gtc.dace.utils import (
     OIRFieldRenamer,
     dace_dtype_to_typestr,
     get_node_name_mapping,
+    mask_includes_inner_domain,
 )
 from gtc.oir import (
     CacheDesc,
@@ -1068,7 +1069,9 @@ class StencilComputation(library.LibraryNode):
     def has_splittable_regions(self):
         for he in self.oir_node.iter_tree().if_isinstance(oir.HorizontalExecution):
             if not he.declarations and any(
-                isinstance(stmt, oir.MaskStmt) and isinstance(stmt.mask, common.HorizontalMask)
+                isinstance(stmt, oir.MaskStmt)
+                and isinstance(stmt.mask, common.HorizontalMask)
+                and not mask_includes_inner_domain(stmt.mask)
                 for stmt in he.body
             ):
                 return True
