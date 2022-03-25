@@ -771,9 +771,24 @@ class StencilComputation(library.LibraryNode):
             self.symbol_mapping.update(
                 {
                     axis.domain_symbol(): dace.symbol(axis.domain_symbol(), dtype=dace.int32)
-                    for axis in dcir.Axis.dims_3d()
+                    for axis in dcir.Axis.horizontal_axes()
                 }
             )
+            if any(
+                marker.level == common.LevelMarker.END
+                for marker in oir_node.iter_tree()
+                .if_isinstance(VerticalLoopSection)
+                .getattr("interval")
+                .if_isinstance(common.LevelMarker)
+            ) or any(
+                decl.dimensions[dcir.Axis.K.to_idx()]
+                for decl in self.declarations.values()
+                if isinstance(decl, oir.FieldDecl)
+            ):
+                self.symbol_mapping[dcir.Axis.K.domain_symbol()] = dace.symbol(
+                    dcir.Axis.K.domain_symbol(), dtype=dace.int32
+                )
+
             if oir_node.loc is not None:
 
                 self.debuginfo = dace.dtypes.DebugInfo(
