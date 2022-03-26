@@ -20,6 +20,7 @@ from gtc import gtir
 from gtc.passes.gtir_check_single_iteration import check_single_iteration
 from gtc.passes.gtir_dtype_resolver import resolve_dtype
 from gtc.passes.gtir_prune_unused_parameters import prune_unused_parameters
+from gtc.passes.gtir_remove_regions import remove_regions
 from gtc.passes.gtir_upcaster import upcast
 
 
@@ -38,7 +39,13 @@ class GtirPipeline:
         self._cache: Dict[Tuple[PASS_T, ...], gtir.Stencil] = {}
 
     def steps(self) -> Sequence[PASS_T]:
-        return [prune_unused_parameters, resolve_dtype, upcast, check_single_iteration]
+        return [
+            prune_unused_parameters,
+            resolve_dtype,
+            upcast,
+            check_single_iteration,
+            remove_regions,
+        ]
 
     def apply(self, steps: Sequence[PASS_T]) -> gtir.Stencil:
         result = self.gtir

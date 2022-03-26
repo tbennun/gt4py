@@ -193,9 +193,11 @@ class DomainInterval(Node):
         second_start = second.start if second.start is not None else first.start
         second_end = second.end if second.end is not None else first_end.end
 
-        assert (first_start <= second_end and first_end >= second_start) or (
-            second_start <= first_end and second_end >= first_start
-        )
+        if not (
+            (first_start <= second_end and first_end >= second_start)
+            or (second_start <= first_end and second_end >= first_start)
+        ):
+            return None
 
         start = max(first_start, second_start)
         start = AxisBound(axis=axis, level=start.level, offset=start.offset)
@@ -378,9 +380,11 @@ class GridSubset(Node):
                 ),
                 end=AxisBound(level=interval.end.level, offset=interval.end.offset, axis=Axis.K),
             )
-        else:
+        elif interval is not None:
             assert isinstance(interval, (TileInterval, IndexWithExtent))
             res_interval = interval
+        else:
+            return cls(intervals={})
 
         return cls(intervals={axis: res_interval})
 

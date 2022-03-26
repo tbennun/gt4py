@@ -102,18 +102,16 @@ def make_args_data_from_iir(implementation_ir: gt_ir.StencilImplementation) -> M
 
 
 def get_unused_params_from_gtir(
-    pipeline: GtirPipeline,
+    params,
+    node: gtir.Stencil,
 ) -> List[Union[gtir.FieldDecl, gtir.ScalarDecl]]:
-    node = pipeline.gtir
     field_names = {
-        param.name for param in node.params if isinstance(param, (gtir.FieldDecl, gtir.ScalarDecl))
+        param.name for param in params if isinstance(param, (gtir.FieldDecl, gtir.ScalarDecl))
     }
     used_field_names = (
         node.iter_tree().if_isinstance(gtir.FieldAccess, gtir.ScalarAccess).getattr("name").to_set()
     )
-    return [
-        param for param in node.params if param.name in field_names.difference(used_field_names)
-    ]
+    return [param for param in params if param.name in field_names.difference(used_field_names)]
 
 
 def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
@@ -159,7 +157,7 @@ def make_args_data_from_gtir(pipeline: GtirPipeline) -> ModuleData:
             dtype=numpy.dtype(node.symtable_[name].dtype.name.lower())
         )
 
-    unref_params = get_unused_params_from_gtir(pipeline)
+    unref_params = get_unused_params_from_gtir(pipeline.gtir.params, node)
     for param in sorted(unref_params, key=lambda decl: decl.name):
         if isinstance(param, gtir.FieldDecl):
             data.field_info[param.name] = None
@@ -410,7 +408,8 @@ def iir_has_effect(implementation_ir: gt_ir.StencilImplementation) -> bool:
 
 
 def gtir_has_effect(pipeline: GtirPipeline) -> bool:
-    return True
+    node: gtir.Stencil = pipeline.full()
+    return len(node.params) > 0
 
 
 class PyExtModuleGenerator(BaseModuleGenerator):
