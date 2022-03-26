@@ -94,6 +94,20 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
             ctx.stmt_extents[id(node)] = res_extent
             return gtir.HorizontalRegion(mask=node.mask, block=gtir.BlockStmt(body=res_stmts))
 
+    def visit_While(self, node: gtir.While, *, ctx):
+        res = None
+        stmts = node.body
+        new_stmts = self.generic_visit(node.body, ctx=ctx)
+
+        for stmt in stmts:
+            extent = ctx.stmt_extents[id(stmt)]
+            if res is None:
+                res = extent
+            else:
+                res |= extent
+        ctx.stmt_extents[id(node)] = res
+        return gtir.While(cond=node.cond, body=new_stmts)
+
     def _visit_IfStmt(self, node, *, ctx):
         res = None
         stmts = node.true_branch.body
@@ -130,4 +144,7 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
 
 
 def remove_regions(node):
+    if len(iter_tree(node).if_isinstance(gtir.HorizontalRegion).to_list()) == 0:
+        # TODO deal with complexity. To unlock satadjust, just return if no regions.
+        return node
     return RemoveUnexecutedRegions().visit(node)
