@@ -327,10 +327,11 @@ class TaskletCodegen(codegen.TemplatedGenerator):
         return "\n".join(self.visit(node.stmts, targets=set(), **kwargs))
 
     def visit_MaskStmt(self, node: oir.MaskStmt, **kwargs):
+        cond = self.visit(node.mask, is_target=False, **kwargs)
         mask_str = ""
         indent = ""
-        if node.mask is not None:
-            mask_str = f"if {self.visit(node.mask, is_target=False, **kwargs)}:"
+        if cond != "":
+            mask_str = f"if {cond}:"
             indent = "    "
         body_code = self.visit(node.body, **kwargs)
         body_code = [indent + b for b in body_code]
