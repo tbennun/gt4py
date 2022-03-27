@@ -31,11 +31,23 @@ def _overlap_along_axis(
     """Return a tuple of the distances to the edge of the compute domain, if overlapping."""
     if hasattr(interval.start, "level") and interval.start.level == common.LevelMarker.START:
         start_diff = extent[0] - interval.start.offset
+    elif (
+        hasattr(interval.start, "level")
+        and interval.start.level == common.LevelMarker.END
+        and interval.start.offset > extent[1]
+    ):
+        return None
     else:
         start_diff = None
 
     if hasattr(interval.end, "level") and interval.end.level == common.LevelMarker.END:
         end_diff = extent[1] - interval.end.offset
+    elif (
+        hasattr(interval.end, "level")
+        and interval.end.level == common.LevelMarker.START
+        and interval.end.offset < extent[0]
+    ):
+        return None
     else:
         end_diff = None
 
