@@ -29,13 +29,11 @@ from gtc.passes.oir_optimizations.caches import (
     PruneKCacheFills,
     PruneKCacheFlushes,
 )
-from gtc.passes.oir_optimizations.horizontal_execution_merging import (
-    GreedyMerging,
-    OnTheFlyMerging,
-)
+from gtc.passes.oir_optimizations.horizontal_execution_merging import GreedyMerging, OnTheFlyMerging
 from gtc.passes.oir_optimizations.inlining import MaskInlining
 from gtc.passes.oir_optimizations.mask_stmt_merging import MaskStmtMerging
 from gtc.passes.oir_optimizations.pruning import NoFieldAccessPruning
+from gtc.passes.oir_optimizations.remove_regions import RemoveUnexecutedRegions
 from gtc.passes.oir_optimizations.temporaries import (
     LocalTemporariesToScalars,
     WriteBeforeReadTemporariesToScalars,
@@ -77,6 +75,7 @@ class DefaultPipeline(OirPipeline):
     def all_steps() -> Sequence[PassT]:
         return [
             AdjacentLoopMerging,
+            RemoveUnexecutedRegions,
             IdenticalSectionMerging,
             graph_merge_horizontal_executions,
             GreedyMerging,

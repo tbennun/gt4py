@@ -21,20 +21,21 @@ from typing import Any, Dict, Optional
 import eve
 from gt4py.definitions import Extent
 from gtc import oir
+from gtc.dace.utils import compute_horizontal_block_extents
 from gtc.passes import utils
 
 
 class RemoveUnexecutedRegions(eve.NodeTranslator):
     @dataclass
     class Context:
-        fields_extents: Dict[str, Extent] = field(default_factory=dict)
+        block_extents: Dict[int, Extent] = field(default_factory=dict)
 
     def visit_Stencil(self, node: oir.Stencil, **kwargs: Any) -> oir.Stencil:
-        ctx = self.Context()
-        rev_vertical_loops = [self.visit(loop, ctx=ctx) for loop in reversed(node.vertical_loops)]
-        vertical_loops = [
-            vloop for vloop in reversed(rev_vertical_loops) if isinstance(vloop, oir.VerticalLoop)
-        ]
+        print(f"deregioning {node.name}")
+        block_extents = compute_horizontal_block_extents(node)
+        ctx = self.Context(block_extents=block_extents)
+        vertical_loops = [self.visit(loop, ctx=ctx) for loop in node.vertical_loops]
+        vertical_loops = [loop for loop in vertical_loops if isinstance(loop, oir.VerticalLoop)]
         return oir.Stencil(
             name=node.name,
             params=node.params,
@@ -54,15 +55,13 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
         node: oir.VerticalLoopSection,
         **kwargs: Any,
     ) -> Optional[oir.VerticalLoopSection]:
-        rev_executions = [
-            self.visit(execution, **kwargs) for execution in reversed(node.horizontal_executions)
-        ]
-        if executions := [
-            execution
-            for execution in reversed(rev_executions)
-            if isinstance(execution, oir.HorizontalExecution)
+        executions = [self.visit(execution, **kwargs) for execution in node.horizontal_executions]
+        if res_executions := [
+            execution for execution in executions if isinstance(execution, oir.HorizontalExecution)
         ]:
-            return oir.VerticalLoopSection(interval=node.interval, horizontal_executions=executions)
+            return oir.VerticalLoopSection(
+                interval=node.interval, horizontal_executions=res_executions
+            )
         else:
             return eve.NOTHING
 
@@ -73,16 +72,7 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
         ctx: Context,
         **kwargs: Any,
     ) -> Optional[oir.HorizontalExecution]:
-        compute_extent = (
-            node.iter_tree()
-            .if_is(oir.AssignStmt)
-            .getattr("left")
-            .if_is(oir.FieldAccess)
-            .reduce(
-                lambda extent, node: extent.union(ctx.fields_extents.setdefault(node.name)),
-                init=Extent.zeros(),
-            )
-        )
+        compute_extent = ctx.block_extents[id(node)]
 
         if filtered_body := self.visit(node.body, ctx=ctx, compute_extent=compute_extent, **kwargs):
             return oir.HorizontalExecution(
@@ -109,23 +99,6 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
             node.body,
             compute_extent=(compute_extent - dist_from_edge),
             **kwargs,
-        )
-
-        return node
-
-    def visit_FieldAccess(
-        self,
-        node: oir.FieldAccess,
-        *,
-        ctx: Context,
-        compute_extent: Extent,
-        **kwargs: Any,
-    ) -> oir.FieldAccess:
-        """Take the union of this access (converted to field extent) with all existing extents."""
-        extent = utils.extent_from_offset(node.offset)
-        accumulated_extent = compute_extent + extent
-        ctx.fields_extents[node.name] = ctx.fields_extents.get(node.name, Extent.zeros()).union(
-            accumulated_extent
         )
 
         return node
