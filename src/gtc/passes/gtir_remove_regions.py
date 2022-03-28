@@ -16,7 +16,7 @@
 
 """Removes horizontal executions that is never executed and computes the correct extents."""
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import eve
 from eve.iterators import iter_tree
@@ -34,7 +34,9 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
     def visit_Stencil(self, node: gtir.Stencil, **kwargs: Any) -> gtir.Stencil:
         _, stmt_extents = LegacyExtentsVisitor().visit(node)
         ctx = self.Context(stmt_extents=stmt_extents)
-        rev_vertical_loops = [self.visit(loop, ctx=ctx) for loop in reversed(node.vertical_loops)]
+        rev_vertical_loops = [
+            self.visit(loop, ctx=ctx, params=node.params) for loop in reversed(node.vertical_loops)
+        ]
         vertical_loops = [
             vloop for vloop in reversed(rev_vertical_loops) if isinstance(vloop, gtir.VerticalLoop)
         ]
@@ -56,10 +58,16 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
             vertical_loops=vertical_loops,
         )
 
-    def visit_VerticalLoop(self, node: gtir.VerticalLoop, **kwargs: Any) -> gtir.VerticalLoop:
+    def visit_VerticalLoop(
+        self, node: gtir.VerticalLoop, *, params: List[gtir.FieldDecl], **kwargs: Any
+    ) -> gtir.VerticalLoop:
         stmts = [self.visit(stmt, **kwargs) for stmt in node.body]
         stmts = [stmt for stmt in stmts if stmt is not eve.NOTHING]
-        if stmts:
+        param_names = [param.name for param in params]
+        if stmts and any(
+            assign.name in param_names
+            for assign in iter_tree(stmts).if_isinstance(gtir.ParAssignStmt).getattr("left")
+        ):
             temporaries = [
                 decl
                 for decl in node.temporaries
