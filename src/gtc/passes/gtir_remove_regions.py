@@ -63,17 +63,17 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
     ) -> gtir.VerticalLoop:
         stmts = [self.visit(stmt, **kwargs) for stmt in node.body]
         stmts = [stmt for stmt in stmts if stmt is not eve.NOTHING]
-        param_names = [param.name for param in params]
+        temporaries = [
+            decl
+            for decl in node.temporaries
+            if decl.name
+            in iter_tree(stmts).if_isinstance(gtir.FieldAccess).getattr("name").to_set()
+        ]
+        field_names = {param.name for param in params} | {temp.name for temp in temporaries}
         if stmts and any(
-            assign.name in param_names
+            assign.name in field_names
             for assign in iter_tree(stmts).if_isinstance(gtir.ParAssignStmt).getattr("left")
         ):
-            temporaries = [
-                decl
-                for decl in node.temporaries
-                if decl.name
-                in iter_tree(stmts).if_isinstance(gtir.FieldAccess).getattr("name").to_set()
-            ]
             return gtir.VerticalLoop(
                 interval=node.interval,
                 loop_order=node.loop_order,
