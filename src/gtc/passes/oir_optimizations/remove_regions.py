@@ -44,7 +44,9 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
         )
 
     def visit_VerticalLoop(self, node: oir.VerticalLoop, **kwargs: Any) -> oir.VerticalLoop:
-        if sections := [self.visit(section, **kwargs) for section in node.sections]:
+        sections = [self.visit(section, **kwargs) for section in node.sections]
+        sections = [section for section in sections if isinstance(section, oir.VerticalLoopSection)]
+        if sections:
             # Clear caches
             return oir.VerticalLoop(loop_order=node.loop_order, sections=sections, caches=[])
         else:
