@@ -775,11 +775,11 @@ class StencilComputation(library.LibraryNode):
                 }
             )
             if any(
-                marker.level == common.LevelMarker.END
-                for marker in oir_node.iter_tree()
+                interval.start.level == common.LevelMarker.END
+                or interval.end.level == common.LevelMarker.END
+                for interval in oir_node.iter_tree()
                 .if_isinstance(VerticalLoopSection)
                 .getattr("interval")
-                .if_isinstance(common.LevelMarker)
             ) or any(
                 decl.dimensions[dcir.Axis.K.to_idx()]
                 for decl in self.declarations.values()
