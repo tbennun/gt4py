@@ -334,10 +334,14 @@ class BaseOirSDFGBuilder(ABC):
                     dace.symbolic.pystr_to_symbolic(f"__{name}_d{dim}_stride")
                     for dim, _ in enumerate(decl.data_dims)
                 )
+                default_shape = [
+                    f"__axis" for idx, axis in enumerate("IJK") if decl.dimensions[idx]
+                ] + [d for d in decl.data_dims]
+
                 self._sdfg.add_array(
                     name,
                     dtype=dtype,
-                    shape=shapes[name],
+                    shape=shapes.get(name, default_shape),
                     strides=strides,
                     transient=isinstance(decl, Temporary) and self.has_transients,
                     lifetime=dace.AllocationLifetime.Persistent
