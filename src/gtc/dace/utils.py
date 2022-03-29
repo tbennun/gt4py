@@ -1212,6 +1212,41 @@ def make_subset_str(
     return ",".join(res_strs)
 
 
+def get_access_info_from_stencil_computation_sdfg(sdfg):
+    from gtc.dace.nodes import StencilComputation
+
+    nodes = [n for n, _ in sdfg.all_nodes_recursive() if isinstance(n, StencilComputation)]
+    # decls = {
+    #     name: decl
+    #     for node in nodes
+    #     for name, decl in node.declarations,
+    #     if isinstance(decl, oir.FieldDecl)
+    # }
+    # block_extents = dict()
+    #
+    # for node in nodes:
+    #     for i, section in enumerate(node.oir_node.sections):
+    #         for j, he in enumerate(section.horizontal_executions):
+    #             block_extents[id(he)] = node.extents[j * len(node.oir_node.sections) + i]
+    #
+    #
+    # block_extents = lambda he: block_extents[id(he)]
+    res_access_infos = dict()
+    for node in nodes:
+        access_infos = compute_dcir_access_infos(
+            node.oir_node,
+            oir_decls=node.declarations,
+            block_extents=node.get_extents,
+            collect_read=True,
+            collect_write=True,
+            include_full_domain=True,
+        )
+        for k, v in access_infos.items():
+            res_access_infos.setdefault(k, v)
+            res_access_infos[k] = res_access_infos[k].union(v)
+    return res_access_infos
+
+
 class DaceStrMaker:
     def __init__(self, stencil: oir.Stencil):
         self.decls = {
@@ -1233,6 +1268,14 @@ class DaceStrMaker:
         self.access_collection = AccessCollector.apply(stencil)
 
     def make_shape(self, field):
+        from gtc import daceir as dcir
+
+        if field not in self.access_infos:
+            return [
+                axis.domain_symbol()
+                for axis in dcir.Axis.dims_3d()
+                if self.decls[field].dimensions[axis.to_idx()]
+            ] + [d for d in self.decls[field].data_dims]
         return self.access_infos[field].shape + self.decls[field].data_dims
 
     def make_input_subset_str(self, node, field):

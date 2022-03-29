@@ -70,18 +70,17 @@ class LegacyExtentsVisitor(NodeVisitor):
 
     def visit_Stencil(self, node: gtir.Stencil, **kwargs: Any) -> FIELD_EXT_T:
         field_extents: FIELD_EXT_T = dict()
-        stmt_extents: Dict[str, Extent] = dict()
         ctx = self.StencilContext()
         for field_if in node.iter_tree().if_isinstance(gtir.FieldIfStmt):
             self.visit(field_if, ctx=ctx)
         for region in node.iter_tree().if_isinstance(gtir.HorizontalRegion):
             self.visit(region, ctx=ctx)
         for assign in reversed(_iter_assigns(node).to_list()):
-            self.visit(assign, ctx=ctx, field_extents=field_extents, stmt_extents=stmt_extents)
+            self.visit(assign, ctx=ctx, field_extents=field_extents)
         for name in _iter_field_names(node):
             if name not in field_extents:
                 field_extents[name] = Extent.zeros()
-        return field_extents, stmt_extents
+        return field_extents
 
     def visit_HorizontalRegion(
         self,
@@ -99,7 +98,6 @@ class LegacyExtentsVisitor(NodeVisitor):
         *,
         ctx: StencilContext,
         field_extents: Dict[str, Extent],
-        stmt_extents: Dict[str, Extent],
         **kwargs: Any,
     ) -> None:
         horizontal_mask = ctx.assign_masks.get(id(node), None)
@@ -107,7 +105,6 @@ class LegacyExtentsVisitor(NodeVisitor):
         if horizontal_mask:
             dist_from_edge = utils.compute_extent_difference(left_extent, horizontal_mask)
             if dist_from_edge is None:
-                stmt_extents[id(node)] = left_extent
                 return
         else:
             dist_from_edge = Extent.zeros()
@@ -124,7 +121,6 @@ class LegacyExtentsVisitor(NodeVisitor):
         )
         for key, value in pa_ctx.assign_extents.items():
             field_extents[key] |= value
-        stmt_extents[id(node)] = pa_ctx.left_extent
 
     def visit_FieldIfStmt(
         self, node: gtir.FieldIfStmt, *, ctx: StencilContext, **kwargs: Any
@@ -187,5 +183,4 @@ class LegacyExtentsVisitor(NodeVisitor):
 
 
 def compute_legacy_extents(node: gtir.Stencil, allow_negative=False) -> FIELD_EXT_T:
-    res, _ = LegacyExtentsVisitor(allow_negative).visit(node)
-    return res
+    return LegacyExtentsVisitor(allow_negative).visit(node)

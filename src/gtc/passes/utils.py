@@ -45,7 +45,7 @@ def _overlap_along_axis(
     elif (
         hasattr(interval.end, "level")
         and interval.end.level == common.LevelMarker.START
-        and interval.end.offset < extent[0]
+        and interval.end.offset <= extent[0]
     ):
         return None
     else:
