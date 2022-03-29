@@ -31,7 +31,6 @@ class RemoveUnexecutedRegions(eve.NodeTranslator):
         block_extents: Dict[int, Extent] = field(default_factory=dict)
 
     def visit_Stencil(self, node: oir.Stencil, **kwargs: Any) -> oir.Stencil:
-        print(f"deregioning {node.name}")
         block_extents = compute_horizontal_block_extents(node)
         ctx = self.Context(block_extents=block_extents)
         vertical_loops = [self.visit(loop, ctx=ctx) for loop in node.vertical_loops]

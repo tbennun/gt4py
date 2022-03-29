@@ -856,7 +856,6 @@ class OirSDFGBuilder(eve.NodeVisitor):
             dace_str_maker=DaceStrMaker(node),
             declarations={decl.name: decl for decl in node.params + node.declarations},
         )
-        print([par.name for par in node.params])
         for param in node.params:
             if isinstance(param, oir.FieldDecl):
                 dim_strs = [d for i, d in enumerate("IJK") if param.dimensions[i]] + [
