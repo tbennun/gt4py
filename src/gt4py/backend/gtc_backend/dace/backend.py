@@ -202,7 +202,7 @@ class GTCDaCeExtGenerator:
 
             with dace.config.set_temporary("compiler", "cuda", "max_concurrent_streams", value=-1):
                 implementation = DaCeComputationCodegen.apply(
-                    gtir, sdfg, self.backend.storage_info["layout_map"]
+                    gtir, sdfg, self.backend.storage_info["layout_map"], oir=oir
                 )
 
             bindings = DaCeBindingsCodegen.apply(
@@ -285,7 +285,7 @@ class DaCeComputationCodegen:
         ]
 
     @classmethod
-    def apply(cls, gtir, sdfg: dace.SDFG, make_layout):
+    def apply(cls, gtir, sdfg: dace.SDFG, make_layout, oir):
         self = cls()
         code_objects = sdfg.generate_code()
         computations = code_objects[[co.title for co in code_objects].index("Frame")].clean_code
@@ -324,7 +324,7 @@ class DaCeComputationCodegen:
 
         interface = cls.template.definition.render(
             name=sdfg.name,
-            dace_args=self.generate_dace_args(gtir, sdfg, make_layout),
+            dace_args=self.generate_dace_args(gtir, sdfg, make_layout, oir),
             functor_args=self.generate_functor_args(sdfg),
             tmp_allocs=self.generate_tmp_allocs(sdfg),
             allocator="gt::cuda_util::cuda_malloc" if is_gpu else "std::make_unique",
@@ -344,13 +344,22 @@ class DaCeComputationCodegen:
     def __init__(self):
         self._unique_index = 0
 
-    def generate_dace_args(self, gtir, sdfg, make_layout):
+    def generate_dace_args(self, gtir, sdfg, make_layout, oir):
+        from gtc.dace.utils import DaceStrMaker
+
+        access_infos = DaceStrMaker(oir).access_infos
         offset_dict: Dict[str, Tuple[int, int, int]] = {
-            k: (-v[0][0], -v[1][0], -v[2][0]) for k, v in compute_legacy_extents(gtir).items()
+            k: (
+                -v.grid_subset.intervals["I"].start.offset if "I" in v.grid_subset.intervals else 0,
+                -v.grid_subset.intervals["J"].start.offset if "J" in v.grid_subset.intervals else 0,
+                0,
+            )
+            for k, v in access_infos.items()
         }
         k_origins = compute_k_origins(gtir)
         for name, origin in k_origins.items():
-            offset_dict[name] = (offset_dict[name][0], offset_dict[name][1], origin)
+            if name in offset_dict:
+                offset_dict[name] = (offset_dict[name][0], offset_dict[name][1], origin)
 
         symbols = {f"__{var}": f"__{var}" for var in "IJK"}
         for name, array in sdfg.arrays.items():
@@ -397,7 +406,7 @@ class DaCeComputationCodegen:
                              std::array<gt::int_t, {ndim}>{{{origin}}}
                          )"""
                 origin = tuple(
-                    -offset_dict[name][idx]
+                    -offset_dict[name][idx] if name in offset_dict else 0
                     for idx, var in enumerate("IJK")
                     if any(
                         dace.symbolic.pystr_to_symbolic(f"__{var}") in s.free_symbols

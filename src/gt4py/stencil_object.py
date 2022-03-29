@@ -97,6 +97,24 @@ class FrozenStencil(SDFGConvertible):
 
     def _sdfg_add_arrays_and_edges(self, wrapper_sdfg, state, inner_sdfg, nsdfg, inputs, outputs):
         device = gt_backend.from_name(self.stencil_object.backend).storage_info["device"]
+
+        from gtc.dace.utils import get_access_info_from_stencil_computation_sdfg
+
+        access_infos = get_access_info_from_stencil_computation_sdfg(inner_sdfg)
+        lower_extents = {
+            k: (
+                int(-v.grid_subset.intervals["I"].start.offset)
+                if "I" in v.grid_subset.intervals
+                else 0,
+                int(-v.grid_subset.intervals["J"].start.offset)
+                if "J" in v.grid_subset.intervals
+                else 0,
+                self.stencil_object.field_info[k].boundary.lower_indices[-1]
+                if k in self.stencil_object.field_info
+                else 0,
+            )
+            for k, v in access_infos.items()
+        }
         for name, array in inner_sdfg.arrays.items():
             if isinstance(array, dace.data.Array) and not array.transient:
                 axes = self.stencil_object.field_info[name].axes
@@ -125,12 +143,11 @@ class FrozenStencil(SDFGConvertible):
                     f"{o - e}:{o - e + s}"
                     for o, e, s in zip(
                         origin,
-                        self.stencil_object.field_info[name].boundary.lower_indices,
+                        lower_extents.get(name, (0, 0, 0)),
                         inner_sdfg.arrays[name].shape,
                     )
                 ]
                 subset_strs += [f"0:{d}" for d in self.stencil_object.field_info[name].data_dims]
-
                 if name in inputs:
                     state.add_edge(
                         state.add_read(name),
