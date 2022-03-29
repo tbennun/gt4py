@@ -29,6 +29,7 @@ from dace.sdfg.utils import fuse_states
 
 import eve
 import gtc.oir as oir
+from gt4py.definitions import Extent
 from gtc.common import LevelMarker, VariableKOffset, data_type_to_typestr
 from gtc.dace.nodes import (
     HorizontalExecutionLibraryNode,
@@ -322,8 +323,8 @@ class BaseOirSDFGBuilder(ABC):
             if isinstance(decl, ScalarDecl):
                 self._sdfg.add_symbol(name, stype=dtype)
             else:
-                if name not in self._get_access_collection(self._sdfg).offsets():
-                    continue
+                # if name not in self._get_access_collection(self._sdfg).offsets():
+                #     continue
                 assert name in self._dtypes
                 strides = tuple(
                     dace.symbolic.pystr_to_symbolic(f"__{name}_{var}_stride")
@@ -561,10 +562,12 @@ class StencilOirSDFGBuilder(BaseOirSDFGBuilder):
                 continue
             shape = []
             if self._axes[name][0]:
-                di = self._extents[name][0][1] + self._extents[name][0][0]
+                extent = self._extents.get(name, Extent.zeros(2))
+                di = extent[0][1] + extent[0][0]
                 shape.append(f"__I{di:+d}")
             if self._axes[name][1]:
-                dj = self._extents[name][1][1] + self._extents[name][1][0]
+                extent = self._extents.get(name, Extent.zeros(2))
+                dj = extent[1][1] + extent[1][0]
                 shape.append(f"__J{dj:+d}")
             if self._axes[name][2]:
                 shape.append(self.get_k_size(name))
@@ -587,6 +590,8 @@ class StencilOirSDFGBuilder(BaseOirSDFGBuilder):
                     subset = edge.data.subset
                 subset = dace.subsets.union(subset, edge.data.subset)
         subset: dace.subsets.Range
+        if subset is None:
+            return "__K"
         k_size = subset.bounding_box_size()[axis_idx] + subset.ranges[axis_idx][0]
 
         k_sym = dace.symbol("__K")
@@ -847,6 +852,7 @@ class OirSDFGBuilder(eve.NodeVisitor):
             dace_str_maker=DaceStrMaker(node),
             declarations={decl.name: decl for decl in node.params + node.declarations},
         )
+        print([par.name for par in node.params])
         for param in node.params:
             if isinstance(param, oir.FieldDecl):
                 dim_strs = [d for i, d in enumerate("IJK") if param.dimensions[i]] + [

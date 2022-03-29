@@ -1233,6 +1233,14 @@ class DaceStrMaker:
         self.access_collection = AccessCollector.apply(stencil)
 
     def make_shape(self, field):
+        from gtc import daceir as dcir
+
+        if field not in self.access_infos:
+            return [
+                axis.domain_symbol()
+                for axis in dcir.Axis.dims_3d()
+                if self.decls[field].dimensions[axis.to_idx()]
+            ] + [d for d in self.decls[field].data_dims]
         return self.access_infos[field].shape + self.decls[field].data_dims
 
     def make_input_subset_str(self, node, field):
