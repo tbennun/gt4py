@@ -259,6 +259,9 @@ def allocate_gpu(default_origin, shape, layout_map, dtype, alignment_bytes, retu
 
 
 def gpu_view(cpu_array):
+    if hasattr(cpu_array, '__cuda_array_interface__'):
+        return cp.asarray(cpu_array)
+
     array_interface = cpu_array.__array_interface__
     array_interface["version"] = 2
     array_interface["strides"] = cpu_array.strides
